@@ -5,7 +5,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as path;
 
 import '../../globals.dart';
@@ -14,10 +13,6 @@ import '../logger/logger.dart';
 
 /// Return the url the application is launched from.
 Future<String> initializePlatform() async {
-  // When running in a desktop embedder, Flutter throws an error because the
-  // platform is not officially supported. This is not needed for web.
-  debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
-
   setGlobal(Storage, FlutterDesktopStorage());
 
   return '';
@@ -58,12 +53,10 @@ class FlutterDesktopStorage implements Storage {
     }
   }
 
-  static File get _preferencesFile =>
-      File(path.join(_userHomeDir(), '.devtools'));
+  static File get _preferencesFile => File(path.join(_userHomeDir(), '.devtools'));
 
   static String _userHomeDir() {
-    final String envKey =
-        Platform.operatingSystem == 'windows' ? 'APPDATA' : 'HOME';
+    final String envKey = Platform.operatingSystem == 'windows' ? 'APPDATA' : 'HOME';
     final String value = Platform.environment[envKey];
     return value == null ? '.' : value;
   }

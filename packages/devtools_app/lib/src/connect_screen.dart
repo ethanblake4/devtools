@@ -1,19 +1,15 @@
 // Copyright 2019 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-import 'package:flutter/foundation.dart';
+import 'package:devtools_app/devtools.dart';
+import 'package:devtools_app/src/framework/framework_core.dart';
+import 'package:devtools_app/src/globals.dart';
+import 'package:devtools_app/src/navigation.dart';
+import 'package:devtools_app/src/theme.dart';
+import 'package:devtools_app/src/url_utils.dart';
+import 'package:devtools_app/src/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:pedantic/pedantic.dart';
-
-import 'common_widgets.dart';
-import 'framework/framework_core.dart';
-import 'globals.dart';
-import 'navigation.dart';
-import 'notifications.dart';
-import 'theme.dart';
-import 'url_utils.dart';
-import 'utils.dart';
 
 /// The screen in the app responsible for connecting to the Dart VM.
 ///
@@ -49,12 +45,6 @@ class _ConnectScreenBodyState extends State<ConnectScreenBody> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Connect',
-              style: textTheme.headline5,
-              key: const Key('Connect Title'),
-            ),
-            const PaddedDivider(),
-            Text(
               'Connect to a Running App',
               style: textTheme.bodyText1,
             ),
@@ -63,11 +53,8 @@ class _ConnectScreenBodyState extends State<ConnectScreenBody> {
               'Enter a URL to a running Dart or Flutter application',
               style: textTheme.caption,
             ),
-            const Padding(padding: EdgeInsets.only(top: 20.0)),
+            const Padding(padding: EdgeInsets.only(top: 12.0)),
             _buildTextInput(),
-            const PaddedDivider(padding: EdgeInsets.symmetric(vertical: 10.0)),
-            // TODO(https://github.com/flutter/devtools/issues/1111): support
-            // drag-and-drop of snapshot files here.
           ],
         ),
       ],
@@ -86,12 +73,6 @@ class _ConnectScreenBodyState extends State<ConnectScreenBody> {
             autofocus: true,
             decoration: const InputDecoration(
               isDense: true,
-              border: OutlineInputBorder(),
-              enabledBorder: OutlineInputBorder(
-                // TODO(jacobr): we need to use themed colors everywhere instead
-                // of hard coding material colors.
-                borderSide: BorderSide(width: 0.5, color: Colors.grey),
-              ),
               hintText: 'http://127.0.0.1:12345/auth_code=',
             ),
             controller: controller,

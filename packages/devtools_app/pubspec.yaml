@@ -8,7 +8,7 @@ description: Web-based performance tooling for Dart and Flutter.
 # this package.
 version: 0.8.0-dev.1
 
-homepage: https://github.com/flutter/devtools
+homepage: https://github.com/ethanblake4/devtools
 
 environment:
   sdk: '>=2.6.0 <3.0.0'

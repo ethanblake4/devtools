@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'package:devtools_app/src/network/network_screen.dart';
+import 'package:devtools_app/src/performance/performance_controller.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:pedantic/pedantic.dart';
@@ -23,8 +25,6 @@ import 'memory/memory_controller.dart';
 import 'memory/memory_screen.dart';
 import 'network/network_controller.dart';
 import 'network/network_screen.dart';
-import 'notifications.dart';
-import 'performance/performance_controller.dart';
 import 'performance/performance_screen.dart';
 import 'preferences.dart';
 import 'scaffold.dart';
@@ -42,10 +42,11 @@ const snapshotRoute = '/snapshot';
 /// Top-level configuration for the app.
 @immutable
 class DevToolsApp extends StatefulWidget {
-  const DevToolsApp(this.screens, this.preferences);
+  const DevToolsApp(this.screens, this.preferences, this.routeSettings);
 
   final List<DevToolsScreen> screens;
   final PreferencesController preferences;
+  final RouteSettings routeSettings;
 
   @override
   State<DevToolsApp> createState() => DevToolsAppState();
@@ -84,7 +85,7 @@ class DevToolsAppState extends State<DevToolsApp> {
   }
 
   /// Generates routes, separating the path from URL query parameters.
-  Route _generateRoute(RouteSettings settings) {
+  Widget _generateRoute(RouteSettings settings) {
     final uri = Uri.parse(settings.name);
     final path = uri.path.isEmpty ? homeRoute : uri.path;
     final args = settings.arguments;
@@ -97,21 +98,18 @@ class DevToolsAppState extends State<DevToolsApp> {
             args,
           );
       assert(() {
-        builder = (context) => _AlternateCheckedModeBanner(
-              builder: (context) => routes[path](
-                context,
-                uri.queryParameters,
-                args,
-              ),
+        builder = (context) => routes[path](
+              context,
+              uri.queryParameters,
+              args,
             );
         return true;
       }());
-      return MaterialPageRoute(settings: settings, builder: builder);
+      return Builder(builder: builder);
     }
 
     // Return a page not found.
-    return MaterialPageRoute(
-      settings: settings,
+    return Builder(
       builder: (BuildContext context) {
         return DevToolsScaffold.withChild(
           child: CenteredMessage("'$uri' not found."),
@@ -127,9 +125,8 @@ class DevToolsAppState extends State<DevToolsApp> {
         if (params['uri']?.isNotEmpty ?? false) {
           final embed = params['embed'] == 'true';
           final page = params['page'];
-          final tabs = embed && page != null
-              ? _visibleScreens().where((p) => p.screenId == page).toList()
-              : _visibleScreens();
+          final tabs =
+              embed && page != null ? _visibleScreens().where((p) => p.screenId == page).toList() : _visibleScreens();
           return Initializer(
             url: params['uri'],
             allowConnectionScreenOnDisconnect: !embed,
@@ -175,8 +172,7 @@ class DevToolsAppState extends State<DevToolsApp> {
     for (var screen in _screens) {
       if (screen.conditionalLibrary != null) {
         if (serviceManager.isServiceAvailable &&
-            serviceManager
-                .isolateManager.selectedIsolateAvailable.isCompleted &&
+            serviceManager.isolateManager.selectedIsolateAvailable.isCompleted &&
             serviceManager.libraryUriAvailableNow(screen.conditionalLibrary)) {
           visibleScreens.add(screen);
         }
@@ -189,8 +185,7 @@ class DevToolsAppState extends State<DevToolsApp> {
 
   Widget _providedControllers({@required Widget child, bool offline = false}) {
     final _providers = widget.screens
-        .where((s) =>
-            s.createController != null && (offline ? s.supportsOffline : true))
+        .where((s) => s.createController != null && (offline ? s.supportsOffline : true))
         .map((s) => s.controllerProvider)
         .toList();
 
@@ -202,17 +197,7 @@ class DevToolsAppState extends State<DevToolsApp> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder(
-      valueListenable: widget.preferences.darkModeTheme,
-      builder: (context, value, _) {
-        return MaterialApp(
-          debugShowCheckedModeBanner: false,
-          theme: themeFor(isDarkTheme: value),
-          builder: (context, child) => Notifications(child: child),
-          onGenerateRoute: _generateRoute,
-        );
-      },
-    );
+    return _generateRoute(widget.routeSettings);
   }
 }
 

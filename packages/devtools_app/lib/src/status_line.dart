@@ -19,7 +19,7 @@ import 'service_manager.dart';
 import 'theme.dart';
 import 'utils.dart';
 
-const statusLineHeight = 24.0;
+const statusLineHeight = 18.0;
 
 /// The status line widget displayed at the bottom of DevTools.
 ///
@@ -57,8 +57,7 @@ class StatusLine extends StatelessWidget {
 
     // Optionally display page specific status.
     if (currentScreen != null) {
-      final Widget pageStatus =
-          buildPageStatus(context, currentScreen, textTheme);
+      final Widget pageStatus = buildPageStatus(context, currentScreen, textTheme);
 
       if (pageStatus != null) {
         children.add(Expanded(
@@ -114,8 +113,7 @@ class StatusLine extends StatelessWidget {
     }
   }
 
-  Widget buildPageStatus(
-      BuildContext context, Screen currentScreen, TextTheme textTheme) {
+  Widget buildPageStatus(BuildContext context, Screen currentScreen, TextTheme textTheme) {
     return currentScreen.buildStatus(context, textTheme);
   }
 
@@ -172,8 +170,7 @@ class StatusLine extends StatelessWidget {
             description = 'web app';
           } else {
             final VM vm = serviceManager.vm;
-            description =
-                '${vm.targetCPU}-${vm.architectureBits} ${vm.operatingSystem}';
+            description = '${vm.targetCPU}-${vm.architectureBits} ${vm.operatingSystem}';
           }
 
           final color = Theme.of(context).textTheme.bodyText2.color;
@@ -201,8 +198,7 @@ class StatusLine extends StatelessWidget {
                 tooltip: 'Device Info',
                 child: InkWell(
                   onTap: () async {
-                    final flutterVersion =
-                        await InfoController.getFlutterVersion();
+                    final flutterVersion = await InfoController.getFlutterVersion();
 
                     unawaited(showDialog(
                       context: context,

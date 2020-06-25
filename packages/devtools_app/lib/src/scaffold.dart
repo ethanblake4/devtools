@@ -39,8 +39,7 @@ class DevToolsScaffold extends StatefulWidget {
   })  : assert(tabs != null),
         super(key: key);
 
-  DevToolsScaffold.withChild({Key key, Widget child})
-      : this(key: key, tabs: [SimpleScreen(child)]);
+  DevToolsScaffold.withChild({Key key, Widget child}) : this(key: key, tabs: [SimpleScreen(child)]);
 
   /// A [Key] that indicates the scaffold is showing in narrow-width mode.
   static const Key narrowWidthKey = Key('Narrow Scaffold');
@@ -55,13 +54,12 @@ class DevToolsScaffold extends StatefulWidget {
   static const double narrowWidthThreshold = 1300.0;
 
   /// The size that all actions on this widget are expected to have.
-  static const double actionWidgetSize = 48.0;
+  static const double actionWidgetSize = 36.0;
 
   // Note: when changing this value, also update `flameChartContainerOffset`
   // from flame_chart.dart.
   /// The border around the content in the DevTools UI.
-  static const EdgeInsets appPadding =
-      EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 8.0);
+  static const EdgeInsets appPadding = EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 0.0);
 
   /// All of the [Screen]s that it's possible to navigate to from this Scaffold.
   final List<Screen> tabs;
@@ -81,8 +79,7 @@ class DevToolsScaffold extends StatefulWidget {
   State<StatefulWidget> createState() => DevToolsScaffoldState();
 }
 
-class DevToolsScaffoldState extends State<DevToolsScaffold>
-    with TickerProviderStateMixin {
+class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderStateMixin {
   /// A tag used for [Hero] widgets to keep the [AppBar] in the same place
   /// across route transitions.
   static const Object _appBarTag = 'DevTools AppBar';
@@ -106,10 +103,8 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
 
     _setupTabController();
 
-    _connectVmSubscription =
-        frameworkController.onConnectVmEvent.listen(_connectVm);
-    _showPageSubscription =
-        frameworkController.onShowPageId.listen(_showPageById);
+    _connectVmSubscription = frameworkController.onConnectVmEvent.listen(_connectVm);
+    _showPageSubscription = frameworkController.onShowPageId.listen(_showPageById);
   }
 
   @override
@@ -119,8 +114,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
     if (widget.tabs.length != oldWidget.tabs.length) {
       var newIndex = 0;
       // Stay on the current tab if possible when the collection of tabs changes.
-      if (_tabController != null &&
-          widget.tabs.contains(oldWidget.tabs[_tabController.index])) {
+      if (_tabController != null && widget.tabs.contains(oldWidget.tabs[_tabController.index])) {
         newIndex = widget.tabs.indexOf(oldWidget.tabs[_tabController.index]);
       }
       // Create a new tab controller to reflect the changed tabs.
@@ -129,9 +123,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
     }
   }
 
-  bool get isNarrow =>
-      MediaQuery.of(context).size.width <=
-      DevToolsScaffold.narrowWidthThreshold;
+  bool get isNarrow => true;
 
   @override
   void didChangeDependencies() {
@@ -158,8 +150,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
     _tabController = TabController(length: widget.tabs.length, vsync: this);
 
     if (widget.initialPage != null) {
-      final initialIndex = widget.tabs
-          .indexWhere((screen) => screen.screenId == widget.initialPage);
+      final initialIndex = widget.tabs.indexWhere((screen) => screen.screenId == widget.initialPage);
       if (initialIndex != -1) {
         _tabController.index = initialIndex;
       }
@@ -199,8 +190,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
   void _showPageById(String pageId) {
     final existingTabIndex = _tabController.index;
 
-    final newIndex =
-        widget.tabs.indexWhere((screen) => screen.screenId == pageId);
+    final newIndex = widget.tabs.indexWhere((screen) => screen.screenId == pageId);
 
     if (newIndex != -1 && newIndex != existingTabIndex) {
       _tabController.animateTo(newIndex);
@@ -281,8 +271,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
               controller: _tabController,
               children: tabBodies,
             ),
-            bottomNavigationBar:
-                widget.embed ? null : _buildStatusLine(context),
+            bottomNavigationBar: widget.embed ? null : _buildStatusLine(context),
           ),
         ),
       ),
@@ -291,7 +280,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
 
   /// Builds an [AppBar] with the [TabBar] placed on the side or the bottom,
   /// depending on the screen width.
-  PreferredSizeWidget _buildAppBar() {
+  Widget _buildAppBar() {
     const title = Text('Dart DevTools');
 
     Widget flexibleSpace;
@@ -311,19 +300,12 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
         onTap: _pushScreenToLocalPageRoute,
         tabs: [for (var screen in widget.tabs) screen.buildTab(context)],
       );
-      preferredSize = isNarrow
-          ? const Size.fromHeight(kToolbarHeight + 40.0)
-          : const Size.fromHeight(kToolbarHeight);
+      preferredSize = isNarrow ? const Size.fromHeight(kToolbarHeight) : const Size.fromHeight(kToolbarHeight - 10.0);
       final alignment = isNarrow ? Alignment.bottomLeft : Alignment.centerRight;
 
-      final rightAdjust =
-          isNarrow ? 0.0 : DevToolsScaffold.actionWidgetSize / 2;
-      final rightPadding = isNarrow
-          ? 0.0
-          : math.max(
-              0.0,
-              DevToolsScaffold.actionWidgetSize * (actions?.length ?? 0.0) -
-                  rightAdjust);
+      final rightAdjust = isNarrow ? 0.0 : DevToolsScaffold.actionWidgetSize / 2;
+      final rightPadding =
+          isNarrow ? 0.0 : math.max(0.0, DevToolsScaffold.actionWidgetSize * (actions?.length ?? 0.0) - rightAdjust);
 
       flexibleSpace = Align(
         alignment: alignment,
@@ -337,20 +319,13 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
       );
     }
 
-    final appBar = AppBar(
-      // Turn off the appbar's back button.
-      automaticallyImplyLeading: false,
-      title: title,
-      actions: actions,
-      flexibleSpace: flexibleSpace,
-    );
+    final appBar =
+        PreferredSize(preferredSize: const Size(1300, 0), child: Container(height: 0.0, color: Colors.black));
 
     if (flexibleSpace == null) return appBar;
 
     return PreferredSize(
-      key: isNarrow
-          ? DevToolsScaffold.narrowWidthKey
-          : DevToolsScaffold.fullWidthKey,
+      key: isNarrow ? DevToolsScaffold.narrowWidthKey : DevToolsScaffold.fullWidthKey,
       preferredSize: preferredSize,
       // Place the AppBar inside of a Hero widget to keep it the same across
       // route transitions.
@@ -365,7 +340,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold>
     const appPadding = DevToolsScaffold.appPadding;
 
     return Container(
-      height: 48.0,
+      height: 42.0,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
