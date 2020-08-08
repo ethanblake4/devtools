@@ -7,6 +7,8 @@ import 'src/preferences.dart';
 export 'src/app.dart';
 export 'src/notifications.dart';
 export 'src/preferences.dart';
+export 'src/table.dart';
+export 'src/table_data.dart';
 
 /// The DevTools application version.
 // This version should only be updated by running tools/update_version.sh
