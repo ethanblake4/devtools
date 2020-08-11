@@ -11,6 +11,8 @@ import '../service_manager.dart';
 import '../trace_event.dart';
 import '../trees.dart';
 import '../utils.dart';
+import 'timeline_processor.dart';
+import 'timeline_utils.dart';
 
 class TimelineData {
   TimelineData({
@@ -83,7 +85,7 @@ class TimelineData {
   void initializeEventGroups() {
     for (TimelineEvent event in timelineEvents) {
       eventGroups.putIfAbsent(
-          _computeEventGroupKey(event), () => TimelineEventGroup())
+          computeEventGroupKey(event), () => TimelineEventGroup())
         ..addEventAtCalculatedRow(event);
     }
   }
@@ -92,20 +94,6 @@ class TimelineData {
     assert(event.isWellFormedDeep);
     timelineEvents.add(event);
     _endTimestampMicros = math.max(_endTimestampMicros, event.maxEndMicros);
-  }
-
-  String _computeEventGroupKey(TimelineEvent event) {
-    if (event.groupKey != null) {
-      return event.groupKey;
-    } else if (event.isAsyncEvent) {
-      return event.name;
-    } else if (event.isUiEvent) {
-      return uiKey;
-    } else if (event.isRasterEvent) {
-      return rasterKey;
-    } else {
-      return unknownKey;
-    }
   }
 
   bool hasCpuProfileData() {
@@ -180,6 +168,8 @@ class TimelineEventGroup {
   /// ]
   final rows = <TimelineRowData>[];
 
+  final rowIndexForEvent = <TimelineEvent, int>{};
+
   int get displayDepth => rows.length;
 
   // TODO(kenz): prevent guideline "elbows" from overlapping other events.
@@ -238,6 +228,7 @@ class TimelineEventGroup {
       final displayRow = event.displayRows[i];
       for (var e in displayRow) {
         rows[row + i].events.add(e);
+        rowIndexForEvent[e] = row + i;
         if (e.time.end >
             (rows[row + i].lastEvent?.time?.end ?? const Duration())) {
           rows[row + i].lastEvent = e;
@@ -735,7 +726,7 @@ class SyncTimelineEvent extends TimelineEvent {
   SyncTimelineEvent(TraceEventWrapper firstTraceEvent) : super(firstTraceEvent);
 
   bool get isUiEventFlow => subtreeHasNodeWithCondition(
-      (TimelineEvent event) => event.name.contains('Engine::BeginFrame'));
+      (TimelineEvent event) => event.name.contains(uiEventName));
 
   bool get isRasterEventFlow => subtreeHasNodeWithCondition(
       (TimelineEvent event) => event.name.contains('PipelineConsume'));

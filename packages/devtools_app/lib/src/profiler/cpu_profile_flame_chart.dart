@@ -13,12 +13,14 @@ class CpuProfileFlameChart extends FlameChart<CpuProfileData, CpuStackFrame> {
   CpuProfileFlameChart(
     CpuProfileData data, {
     @required double width,
+    @required double height,
     @required ValueListenable<CpuStackFrame> selectionNotifier,
     @required Function(CpuStackFrame stackFrame) onSelected,
   }) : super(
           data,
           time: data.profileMetaData.time,
-          totalStartingWidth: width,
+          containerWidth: width,
+          containerHeight: height,
           startInset: sideInsetSmall,
           endInset: sideInsetSmall,
           selectionNotifier: selectionNotifier,
@@ -32,9 +34,6 @@ class CpuProfileFlameChart extends FlameChart<CpuProfileData, CpuStackFrame> {
 class _CpuProfileFlameChartState
     extends FlameChartState<CpuProfileFlameChart, CpuStackFrame> {
   static const stackFramePadding = 1;
-
-  @override
-  int get rowOffsetForTopPadding => 1;
 
   int _colorOffset = 0;
 

@@ -3,6 +3,8 @@
 // found in the LICENSE file.
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide Stack;
@@ -24,8 +26,12 @@ final _log = DebugTimingLogger('debugger', mute: true);
 /// Responsible for managing the debug state of the app.
 class DebuggerController extends DisposableController
     with AutoDisposeControllerMixin {
-  DebuggerController() {
-    switchToIsolate(serviceManager.isolateManager.selectedIsolate);
+  // `initialSwitchToIsolate` can be set to false for tests to skip the logic
+  // in `switchToIsolate`.
+  DebuggerController({bool initialSwitchToIsolate = true}) {
+    if (initialSwitchToIsolate) {
+      switchToIsolate(serviceManager.isolateManager.selectedIsolate);
+    }
 
     autoDispose(serviceManager.isolateManager.onSelectedIsolateChanged
         .listen(switchToIsolate));
@@ -144,11 +150,6 @@ class DebuggerController extends DisposableController
     _librariesVisible.value = !_librariesVisible.value;
   }
 
-  /// Make the 'Libraries' view on the right-hand side of the screen visible.
-  void openLibrariesView() {
-    _librariesVisible.value = true;
-  }
-
   final _stdio = ValueNotifier<List<String>>([]);
   bool _stdioTrailingNewline = false;
 
@@ -198,6 +199,8 @@ class DebuggerController extends DisposableController
 
     _stdio.value = lines;
   }
+
+  final EvalHistory evalHistory = EvalHistory();
 
   void switchToIsolate(IsolateRef ref) async {
     isolateRef = ref;
@@ -272,6 +275,59 @@ class DebuggerController extends DisposableController
     _resuming.value = true;
 
     return _service.resume(isolateRef.id, step: StepOption.kOut);
+  }
+
+  /// Evaluate the given expression in the context of the currently selected
+  /// stack frame, or the top frame if there is no current selection.
+  ///
+  /// This will fail if the application is not currently paused.
+  Future<Response> evalAtCurrentFrame(String expression) async {
+    if (!isPaused.value) {
+      return Future.error(
+        RPCError.withDetails(
+            'evaluateInFrame', RPCError.kInvalidParams, 'Isolate not paused'),
+      );
+    }
+
+    if (stackFramesWithLocation.value.isEmpty) {
+      return Future.error(
+        RPCError.withDetails(
+            'evaluateInFrame', RPCError.kInvalidParams, 'No frames available'),
+      );
+    }
+
+    final frame = selectedStackFrame.value?.frame ??
+        stackFramesWithLocation.value.first.frame;
+
+    return _service.evaluateInFrame(
+      isolateRef.id,
+      frame.index,
+      expression,
+      disableBreakpoints: true,
+    );
+  }
+
+  /// Call `toString()` on the given instance and return the result.
+  Future<Response> invokeToString(InstanceRef instance) {
+    return _service.invoke(
+      isolateRef.id,
+      instance.id,
+      'toString',
+      <String>[],
+      disableBreakpoints: true,
+    );
+  }
+
+  /// Retrieves the full string value of a [stringRef].
+  Future<String> retrieveFullStringValue(
+    InstanceRef stringRef, {
+    String onUnavailable(String truncatedValue),
+  }) async {
+    return serviceManager.service.retrieveFullStringValue(
+      isolateRef.id,
+      stringRef,
+      onUnavailable: onUnavailable,
+    );
   }
 
   Future<void> clearBreakpoints() async {
@@ -353,8 +409,7 @@ class DebuggerController extends DisposableController
         break;
       case EventKind.kBreakpointResolved:
         _breakpoints.value = [
-          for (var b in _breakpoints.value)
-            if (b != event.breakpoint) b,
+          for (var b in _breakpoints.value) if (b != event.breakpoint) b,
           event.breakpoint
         ];
 
@@ -379,8 +434,7 @@ class DebuggerController extends DisposableController
         }
 
         _breakpoints.value = [
-          for (var b in _breakpoints.value)
-            if (b != breakpoint) b
+          for (var b in _breakpoints.value) if (b != breakpoint) b
         ];
 
         _breakpointsWithLocation.value = [
@@ -688,7 +742,9 @@ class DebuggerController extends DisposableController
   /// We call this method as we expand variables in the variable tree, because
   /// building the tree for all variable data at once is very expensive.
   Future<void> buildVariablesTree(Variable variable) async {
-    if (!variable.isExpandable || variable.treeInitialized) return;
+    if (!variable.isExpandable ||
+        variable.treeInitialized ||
+        variable.boundVar.value is! InstanceRef) return;
 
     final InstanceRef instanceRef = variable.boundVar.value;
     try {
@@ -698,38 +754,130 @@ class DebuggerController extends DisposableController
           variable.addAllChildren(_createVariablesForAssociations(result));
         } else if (result.elements != null) {
           variable.addAllChildren(_createVariablesForElements(result));
+        } else if (result.bytes != null) {
+          variable.addAllChildren(_createVariablesForBytes(result));
+          // Check fields last, as all instanceRefs may have a non-null fields
+          // with no entries.
         } else if (result.fields != null) {
           variable.addAllChildren(_createVariablesForFields(result));
-        } else if (result.bytes != null) {
-          // TODO: Display children for Uint8List, Int16List, ...
-
         }
       }
-    } on SentinelException catch (_) {
+    } on SentinelException {
       // Fail gracefully if calling `getObject` throws a SentinelException.
     }
     variable.treeInitialized = true;
   }
 
   List<Variable> _createVariablesForAssociations(Instance instance) {
-    final boundsVariables = instance.associations.map((association) {
-      // For string keys, quote the key value.
-      String keyString = association.key.valueAsString;
-      // TODO(kenz): for maps where keys are not primitive types, support
-      // expanding the keys as well as the values.
-      if (association.key is InstanceRef &&
-          association.key.kind == InstanceKind.kString) {
-        keyString = "'$keyString'";
+    final variables = <Variable>[];
+    for (var i = 0; i < instance.associations.length; i++) {
+      final association = instance.associations[i];
+      if (association.key is! InstanceRef) {
+        continue;
       }
-      return BoundVariable(
-        name: '[$keyString]',
+      final key = BoundVariable(
+        name: '[key]',
+        value: association.key,
+        scopeStartTokenPos: null,
+        scopeEndTokenPos: null,
+        declarationTokenPos: null,
+      );
+      final value = BoundVariable(
+        name: '[value]',
         value: association.value,
         scopeStartTokenPos: null,
         scopeEndTokenPos: null,
         declarationTokenPos: null,
       );
-    });
-    return boundsVariables.map((bv) => Variable.create(bv)).toList();
+      final variable = Variable.create(
+        BoundVariable(
+          name: '[Entry $i]',
+          value: '',
+          scopeStartTokenPos: null,
+          scopeEndTokenPos: null,
+          declarationTokenPos: null,
+        ),
+      );
+      variable.addChild(Variable.create(key));
+      variable.addChild(Variable.create(value));
+      variables.add(variable);
+    }
+    return variables;
+  }
+
+  /// Decodes the bytes into the correctly sized values based on
+  /// [Instance.kind], falling back to raw bytes if a type is not
+  /// matched.
+  ///
+  /// This method does not currently support [Uint64List] or
+  /// [Int64List].
+  List<Variable> _createVariablesForBytes(Instance instance) {
+    final bytes = base64.decode(instance.bytes);
+    final boundVariables = <BoundVariable>[];
+    List<dynamic> result;
+    switch (instance.kind) {
+      case InstanceKind.kUint8ClampedList:
+      case InstanceKind.kUint8List:
+        result = bytes;
+        break;
+      case InstanceKind.kUint16List:
+        result = Uint16List.view(bytes.buffer);
+        break;
+      case InstanceKind.kUint32List:
+        result = Uint32List.view(bytes.buffer);
+        break;
+      case InstanceKind.kUint64List:
+        // TODO: https://github.com/flutter/devtools/issues/2159
+        if (kIsWeb) {
+          return <Variable>[];
+        }
+        result = Uint64List.view(bytes.buffer);
+        break;
+      case InstanceKind.kInt8List:
+        result = Int8List.view(bytes.buffer);
+        break;
+      case InstanceKind.kInt16List:
+        result = Int16List.view(bytes.buffer);
+        break;
+      case InstanceKind.kInt32List:
+        result = Int32List.view(bytes.buffer);
+        break;
+      case InstanceKind.kInt64List:
+        // TODO: https://github.com/flutter/devtools/issues/2159
+        if (kIsWeb) {
+          return <Variable>[];
+        }
+        result = Int64List.view(bytes.buffer);
+        break;
+      case InstanceKind.kFloat32List:
+        result = Float32List.view(bytes.buffer);
+        break;
+      case InstanceKind.kFloat64List:
+        result = Float64List.view(bytes.buffer);
+        break;
+      case InstanceKind.kInt32x4List:
+        result = Int32x4List.view(bytes.buffer);
+        break;
+      case InstanceKind.kFloat32x4List:
+        result = Float32x4List.view(bytes.buffer);
+        break;
+      case InstanceKind.kFloat64x2List:
+        result = Float64x2List.view(bytes.buffer);
+        break;
+      default:
+        result = bytes;
+    }
+
+    for (int i = 0; i < result.length; i++) {
+      boundVariables.add(BoundVariable(
+        name: '[$i]',
+        value: result[i],
+        scopeStartTokenPos: null,
+        scopeEndTokenPos: null,
+        declarationTokenPos: null,
+      ));
+    }
+    return boundVariables.map((bv) => Variable.create(bv)).toList();
   }
 
   List<Variable> _createVariablesForElements(Instance instance) {
@@ -945,4 +1093,53 @@ class ScriptsHistory extends ChangeNotifier
   ScriptsHistory get value => this;
 
   Iterable<ScriptRef> get openedScripts => _openedScripts.toList().reversed;
+}
+
+/// Store and manipulate the expression evaluation history.
+class EvalHistory {
+  var _historyPosition = -1;
+
+  /// Get the expression evaluation history.
+  List<String> get evalHistory => _evalHistory.toList();
+
+  final _evalHistory = <String>[];
+
+  /// Push a new entry onto the expression evaluation history.
+  void pushEvalHistory(String expression) {
+    if (_evalHistory.isNotEmpty && _evalHistory.last == expression) {
+      return;
+    }
+
+    _evalHistory.add(expression);
+    _historyPosition = -1;
+  }
+
+  bool get canNavigateUp {
+    return _evalHistory.isNotEmpty && _historyPosition != 0;
+  }
+
+  void navigateUp() {
+    if (_historyPosition == -1) {
+      _historyPosition = _evalHistory.length - 1;
+    } else if (_historyPosition > 0) {
+      _historyPosition--;
+    }
+  }
+
+  bool get canNavigateDown {
+    return _evalHistory.isNotEmpty && _historyPosition != -1;
+  }
+
+  void navigateDown() {
+    if (_historyPosition != -1) {
+      _historyPosition++;
+    }
+    if (_historyPosition >= _evalHistory.length) {
+      _historyPosition = -1;
+    }
+  }
+
+  String get currentText {
+    return _historyPosition == -1 ? null : _evalHistory[_historyPosition];
+  }
 }

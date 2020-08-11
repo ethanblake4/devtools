@@ -5,17 +5,17 @@ import 'src/config_specific/framework_initialize/framework_initialize.dart';
 import 'src/preferences.dart';
 
 export 'src/app.dart';
+export 'src/config_specific/ide_theme/ide_theme.dart';
 export 'src/notifications.dart';
 export 'src/preferences.dart';
 export 'src/table.dart';
 export 'src/table_data.dart';
 
-/// The DevTools application version.
+/// The DevTools application version
 // This version should only be updated by running tools/update_version.sh
 // that updates all versions for DevTools.
 // Note: a regexp in tools/update_version.sh matches the following line so
 // if you change it you must also modify tools/update_version.sh.
-const String version = '0.8.0-dev.1';
 
 Future<PreferencesController> initDevTools() async {
   final preferences = PreferencesController();
@@ -28,3 +28,5 @@ Future<PreferencesController> initDevTools() async {
   return preferences;
   // defaultScreens
 }
+
+const String version = '0.9.1-dev.1';

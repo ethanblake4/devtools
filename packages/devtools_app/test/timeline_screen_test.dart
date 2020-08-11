@@ -3,15 +3,14 @@
 // found in the LICENSE file.
 
 @TestOn('vm')
-import 'package:devtools_app/src/common_widgets.dart';
-import 'package:devtools_app/src/split.dart';
 import 'package:devtools_app/src/globals.dart';
 import 'package:devtools_app/src/service_manager.dart';
+import 'package:devtools_app/src/split.dart';
 import 'package:devtools_app/src/timeline/event_details.dart';
 import 'package:devtools_app/src/timeline/flutter_frames_chart.dart';
+import 'package:devtools_app/src/timeline/timeline_controller.dart';
 import 'package:devtools_app/src/timeline/timeline_flame_chart.dart';
 import 'package:devtools_app/src/timeline/timeline_screen.dart';
-import 'package:devtools_app/src/timeline/timeline_controller.dart';
 import 'package:devtools_testing/support/timeline_test_data.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -71,21 +70,14 @@ void main() {
       expect(find.text('Timeline'), findsOneWidget);
     });
 
-    testWidgets('builds disabled message when disabled for web app',
-        (WidgetTester tester) async {
-      when(fakeServiceManager.connectedApp.isDartWebAppNow).thenReturn(true);
-      await tester.pumpWidget(wrap(Builder(builder: screen.build)));
-      expect(find.byType(TimelineScreenBody), findsNothing);
-      expect(find.byType(DisabledForWebAppMessage), findsOneWidget);
-    });
-
     testWidgetsWithWindowSize('builds initial content', windowSize,
         (WidgetTester tester) async {
       await pumpTimelineScreen(tester);
       await tester.pumpAndSettle();
       expect(find.byType(FlutterFramesChart), findsOneWidget);
       expect(find.byType(TimelineFlameChart), findsOneWidget);
-      expect(find.byKey(TimelineScreen.emptyTimelineKey), findsNothing);
+      expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
+          findsNothing);
       expect(find.byType(EventDetails), findsOneWidget);
       expect(find.byKey(TimelineScreen.refreshButtonKey), findsOneWidget);
       expect(find.byKey(TimelineScreen.clearButtonKey), findsOneWidget);
@@ -104,7 +96,8 @@ void main() {
       expect(controller.allTraceEvents, isNotEmpty);
       expect(find.byType(FlutterFramesChart), findsOneWidget);
       expect(find.byType(TimelineFlameChart), findsOneWidget);
-      expect(find.byKey(TimelineScreen.emptyTimelineKey), findsNothing);
+      expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
+          findsNothing);
       expect(find.byType(EventDetails), findsOneWidget);
 
       await tester.tap(find.byKey(TimelineScreen.clearButtonKey));
@@ -112,7 +105,8 @@ void main() {
       expect(controller.allTraceEvents, isEmpty);
       expect(find.byType(FlutterFramesChart), findsOneWidget);
       expect(find.byType(TimelineFlameChart), findsNothing);
-      expect(find.byKey(TimelineScreen.emptyTimelineKey), findsOneWidget);
+      expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
+          findsOneWidget);
       expect(find.byType(EventDetails), findsOneWidget);
     });
 
@@ -121,12 +115,14 @@ void main() {
       _setUpServiceManagerForTimeline({});
       await pumpTimelineScreen(tester);
       await tester.pumpAndSettle();
-      expect(find.byKey(TimelineScreen.emptyTimelineKey), findsOneWidget);
+      expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
+          findsOneWidget);
 
       // Refresh with empty timeline.
       await tester.tap(find.byKey(TimelineScreen.refreshButtonKey));
       await tester.pump();
-      expect(find.byKey(TimelineScreen.emptyTimelineKey), findsOneWidget);
+      expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
+          findsOneWidget);
     });
   });
 }

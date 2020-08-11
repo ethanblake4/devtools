@@ -11,27 +11,61 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('utils', () {
+    test('prettyPrintBytes', () {
+      const int kb = 1024;
+      const int mb = 1024 * kb;
+
+      expect(
+        prettyPrintBytes(
+          51,
+          kbFractionDigits: 1,
+          includeUnit: true,
+        ),
+        '51 B',
+      );
+      expect(
+        prettyPrintBytes(
+          52,
+          kbFractionDigits: 1,
+          includeUnit: true,
+        ),
+        '0.1 KB',
+      );
+
+      expect(prettyPrintBytes(kb), '1');
+      expect(prettyPrintBytes(kb + 100, kbFractionDigits: 1), '1.1');
+      expect(prettyPrintBytes(kb + 150, kbFractionDigits: 2), '1.15');
+      expect(prettyPrintBytes(kb, includeUnit: true), '1 KB');
+      expect(prettyPrintBytes(kb * 1000, includeUnit: true), '1,000 KB');
+
+      expect(prettyPrintBytes(mb), '1.0');
+      expect(prettyPrintBytes(mb + kb * 100), '1.1');
+      expect(prettyPrintBytes(mb + kb * 150, mbFractionDigits: 2), '1.15');
+      expect(prettyPrintBytes(mb, includeUnit: true), '1.0 MB');
+      expect(prettyPrintBytes(mb - kb, includeUnit: true), '1,023 KB');
+    });
+
     test('printKb', () {
       const int kb = 1024;
 
-      expect(printKb(0), '0');
-      expect(printKb(1), '1');
-      expect(printKb(kb - 1), '1');
-      expect(printKb(kb), '1');
-      expect(printKb(kb + 1), '2');
-      expect(printKb(2000), '2');
+      expect(printKB(0), '0');
+      expect(printKB(1), '1');
+      expect(printKB(kb - 1), '1');
+      expect(printKB(kb), '1');
+      expect(printKB(kb + 1), '2');
+      expect(printKB(2000), '2');
     });
 
     test('printMb', () {
-      const int MB = 1024 * 1024;
+      const int mb = 1024 * 1024;
 
-      expect(printMb(10 * MB, 0), '10');
-      expect(printMb(10 * MB), '10.0');
-      expect(printMb(10 * MB, 2), '10.00');
+      expect(printMB(10 * mb, fractionDigits: 0), '10');
+      expect(printMB(10 * mb), '10.0');
+      expect(printMB(10 * mb, fractionDigits: 2), '10.00');
 
-      expect(printMb(1000 * MB, 0), '1000');
-      expect(printMb(1000 * MB), '1000.0');
-      expect(printMb(1000 * MB, 2), '1000.00');
+      expect(printMB(1000 * mb, fractionDigits: 0), '1000');
+      expect(printMB(1000 * mb), '1000.0');
+      expect(printMB(1000 * mb, fractionDigits: 2), '1000.00');
     });
 
     test('msAsText', () {
@@ -167,6 +201,10 @@ void main() {
       expect(t.overlaps(overlapEnd), isTrue);
       expect(t.overlaps(overlapAll), isTrue);
       expect(t.overlaps(noOverlap), isFalse);
+    });
+
+    test('formatDateTime', () {
+      expect(formatDateTime(DateTime(2020, 1, 16, 13)), '1:00:00.000 PM');
     });
 
     test('longestFittingSubstring', () {
@@ -496,6 +534,349 @@ void main() {
       final keySet =
           LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyP);
       expect(keySet.describeKeys(), 'Control-P');
+    });
+  });
+
+  group('MovingAverage', () {
+    const simpleDataSet = [
+      100,
+      200,
+      300,
+      500,
+      1000,
+      2000,
+      3000,
+      4000,
+      10000,
+      100000,
+    ];
+
+    /// Data only has spikes.
+    const memorySizeDataSet = [
+      190432640,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      201045160,
+      198200392,
+      200144872,
+      210110632,
+      234077984,
+      229029504,
+      229029544,
+      231396416,
+      240465152,
+      303434344, // Spike @ [25] (clear)
+      302925712,
+      356093472,
+      354292096,
+      400654120,
+      400538848,
+      402336872,
+      444325760,
+      444933104,
+      341888120,
+      406070376,
+      343798216,
+      392421072,
+      392441080,
+      481891656,
+      481447920,
+      433271776,
+      464727280,
+      494727280,
+      564727280,
+      524727280,
+      534727280,
+      564727280,
+      764727280, // Spike @ [48]
+      964727280, // Spike @ [49]
+      1064727280, // Spike @ [50]
+      1464727280, // Spike @ [51]
+      2264727280, // Spike @ [52]
+      2500000000, // Spike @ [53]
+    ];
+
+    /// Data has 5 spikes and 3 dips.
+    const dipsSpikesDataSet = [
+      190432640,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      190443808,
+      5500000, // Dips @ [12]
+      5600000,
+      7443808,
+      9043808,
+      11045160,
+      49800392, // Spikes @ [17]
+      60144872,
+      210110632, // Spikes @ [19]
+      234077984,
+      229029504,
+      229029544,
+      194000000,
+      80000000, // Dips @ [24]
+      100000000,
+      150000000,
+      240465152, // Spike @ [27]
+      303434344,
+      302925712,
+      356093472,
+      354292096,
+      400654120,
+      400538848,
+      402336872,
+      444325760,
+      444933104,
+      341888120,
+      406070376,
+      343798216,
+      392421072,
+      392441080,
+      481891656,
+      3000000, // Dips @ [43]
+      3100000,
+      3200000,
+      330000000, // Spike @ [46]
+      330000000,
+      330000000,
+      340000000,
+      340000000,
+      340000000,
+      964727280,
+      1064727280,
+      1464727280,
+      2264727280, // Spike @ [52]
+      2500000000,
+    ];
+
+    void checkNewItemsAddedToDataSet(MovingAverage mA) {
+      mA.add(1000000);
+      mA.add(2000000);
+      mA.add(3000000);
+      expect(mA.dataSet.length, lessThan(mA.averagePeriod));
+      expect(mA.mean.toInt(), equals(470853));
+      expect(mA.hasSpike(), isTrue);
+      expect(mA.isDipping(), isFalse);
+    }
+
+    test('basic MA', () {
+      // Creation of MovingAverage statically.
+      final simpleMA = MovingAverage(newDataSet: simpleDataSet);
+      expect(simpleMA.dataSet.length, lessThan(simpleMA.averagePeriod));
+      expect(simpleMA.mean.toInt(), equals(12110));
+      checkNewItemsAddedToDataSet(simpleMA);
+
+      simpleMA.clear();
+      expect(simpleMA.mean, equals(0));
+
+      // Dynamically add data to MovingAverage data set.
+      for (int i = 0; i < simpleDataSet.length; i++) {
+        simpleMA.add(simpleDataSet[i]);
+      }
+      // Should be identical to static one from above.
+      expect(simpleMA.mean.toInt(), equals(12110));
+      checkNewItemsAddedToDataSet(simpleMA);
+    });
+
+    test('normal static MA', () {
+      // Creation of MovingAverage statically.
+      final mA = MovingAverage(newDataSet: memorySizeDataSet);
+      // Mean only calculated on last averagePeriod entries (50 default).
+      expect(mA.mean.toInt(), equals(462271799));
+      expect(mA.dataSet.length, equals(mA.averagePeriod));
+      expect(mA.hasSpike(), isTrue);
+      expect(mA.isDipping(), isFalse);
+
+      mA.clear();
+      expect(mA.mean, equals(0));
+      expect(mA.dataSet.length, equals(0));
+    });
+
+    test('dynamic spikes MA', () {
+      final mA = MovingAverage();
+
+      // Dynamically add data to MovingAverage data set.
+      for (int i = 0; i < 20; i++) {
+        mA.add(memorySizeDataSet[i]);
+        expect(mA.hasSpike(), isFalse);
+        expect(mA.isDipping(), isFalse);
+      }
+      expect(mA.mean.toInt(), equals(192829540));
+
+      for (int i = 20; i < 50; i++) {
+        mA.add(memorySizeDataSet[i]);
+        switch (i) {
+          case 25:
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            mA.clear();
+            expect(mA.dataSet.length, 0);
+            break;
+          case 48:
+          case 49:
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            break;
+          default:
+            expect(mA.dataSet.length, i < 25 ? i + 1 : i - 25);
+            expect(mA.hasSpike(), isFalse);
+            expect(mA.isDipping(), isFalse);
+        }
+      }
+      expect(mA.mean.toInt(), equals(469047851));
+
+      expect(mA.dataSet.length, 24);
+
+      for (int i = 50; i < memorySizeDataSet.length; i++) {
+        mA.add(memorySizeDataSet[i]);
+        switch (i) {
+          case 50:
+            expect(mA.mean.toInt(), equals(492875028));
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            expect(mA.dataSet.length, equals(25));
+            break;
+          case 51:
+            expect(mA.mean.toInt(), equals(530253961));
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            expect(mA.dataSet.length, equals(26));
+            break;
+          case 52:
+            expect(mA.mean.toInt(), equals(594493714));
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            expect(mA.dataSet.length, equals(27));
+            break;
+          case 53:
+            expect(mA.mean.toInt(), equals(662547510));
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            expect(mA.dataSet.length, equals(28));
+            break;
+          default:
+            expect(false, isTrue);
+        }
+      }
+
+      // dataSet was cleared on first spike @ item 25 so
+      // dataSet only has the remaining 28 entries.
+      expect(mA.dataSet.length, 28);
+      expect(mA.mean.toInt(), equals(662547510));
+
+      mA.clear();
+      expect(mA.mean, equals(0));
+      expect(mA.dataSet.length, equals(0));
+    });
+
+    test('dips and spikes MA', () {
+      final mA = MovingAverage();
+
+      // Dynamically add data to MovingAverage data set.
+      for (int i = 0; i < memorySizeDataSet.length; i++) {
+        mA.add(dipsSpikesDataSet[i]);
+        switch (i) {
+          case 12:
+          case 24:
+          case 43:
+            expect(mA.hasSpike(), isFalse);
+            expect(mA.isDipping(), isTrue);
+            break;
+          case 17:
+          case 19:
+          case 27:
+          case 46:
+          case 52:
+            expect(mA.hasSpike(), isTrue);
+            expect(mA.isDipping(), isFalse);
+            break;
+          default:
+            expect(mA.hasSpike(), isFalse);
+            expect(mA.isDipping(), isFalse);
+        }
+        if (mA.hasSpike() || mA.isDipping()) {
+          mA.clear();
+          expect(mA.dataSet.length, 0);
+        }
+      }
+    });
+
+    group('parseCssHexColor', () {
+      test('parses 6 digit hex colors', () {
+        expect(parseCssHexColor('#000000'), equals(Colors.black));
+        expect(parseCssHexColor('000000'), equals(Colors.black));
+        expect(parseCssHexColor('#ffffff'), equals(Colors.white));
+        expect(parseCssHexColor('ffffff'), equals(Colors.white));
+        expect(parseCssHexColor('#ff0000'), equals(const Color(0xFFFF0000)));
+        expect(parseCssHexColor('ff0000'), equals(const Color(0xFFFF0000)));
+      });
+      test('parses 3 digit hex colors', () {
+        expect(parseCssHexColor('#000'), equals(Colors.black));
+        expect(parseCssHexColor('000'), equals(Colors.black));
+        expect(parseCssHexColor('#fff'), equals(Colors.white));
+        expect(parseCssHexColor('fff'), equals(Colors.white));
+        expect(parseCssHexColor('#f30'), equals(const Color(0xFFFF3300)));
+        expect(parseCssHexColor('f30'), equals(const Color(0xFFFF3300)));
+      });
+      test('parses 8 digit hex colors', () {
+        expect(parseCssHexColor('#000000ff'), equals(Colors.black));
+        expect(parseCssHexColor('000000ff'), equals(Colors.black));
+        expect(
+            parseCssHexColor('#00000000'), equals(Colors.black.withAlpha(0)));
+        expect(parseCssHexColor('00000000'), equals(Colors.black.withAlpha(0)));
+        expect(parseCssHexColor('#ffffffff'), equals(Colors.white));
+        expect(parseCssHexColor('ffffffff'), equals(Colors.white));
+        expect(
+            parseCssHexColor('#ffffff00'), equals(Colors.white.withAlpha(0)));
+        expect(parseCssHexColor('ffffff00'), equals(Colors.white.withAlpha(0)));
+        expect(parseCssHexColor('#ff0000bb'),
+            equals(const Color(0xFF0000).withAlpha(0xbb)));
+        expect(parseCssHexColor('ff0000bb'),
+            equals(const Color(0xFF0000).withAlpha(0xbb)));
+      });
+      test('parses 4 digit hex colors', () {
+        expect(parseCssHexColor('#000f'), equals(Colors.black));
+        expect(parseCssHexColor('000f'), equals(Colors.black));
+        expect(parseCssHexColor('#0000'), equals(Colors.black.withAlpha(0)));
+        expect(parseCssHexColor('0000'), equals(Colors.black.withAlpha(0)));
+        expect(parseCssHexColor('#ffff'), equals(Colors.white));
+        expect(parseCssHexColor('ffff'), equals(Colors.white));
+        expect(parseCssHexColor('#fff0'), equals(Colors.white.withAlpha(0)));
+        expect(parseCssHexColor('ffffff00'), equals(Colors.white.withAlpha(0)));
+        expect(parseCssHexColor('#f00b'),
+            equals(const Color(0xFF0000).withAlpha(0xbb)));
+        expect(parseCssHexColor('f00b'),
+            equals(const Color(0xFF0000).withAlpha(0xbb)));
+      });
+    });
+
+    group('toCssHexColor', () {
+      test('generates correct 8 digit CSS colors', () {
+        expect(toCssHexColor(Colors.black), equals('#000000ff'));
+        expect(toCssHexColor(Colors.white), equals('#ffffffff'));
+        expect(toCssHexColor(const Color(0xFFAABBCC)), equals('#aabbccff'));
+      });
     });
   });
 }

@@ -9,7 +9,6 @@ import 'package:provider/provider.dart';
 import 'package:vm_service/vm_service.dart';
 
 import '../auto_dispose_mixin.dart';
-import '../config_specific/logger/logger.dart' as logger;
 import '../table.dart';
 import '../table_data.dart';
 import '../utils.dart';
@@ -29,13 +28,12 @@ bool _classMatcher(HeapGraphClassLive liveClass) {
 ///   key: 'filters'      value: List<ClassReference>
 ///   key: 'libraries'    value: List<ClassReference>
 ///
-Map<String, List<Reference>> collect(MemoryController controller) {
+Map<String, List<Reference>> collect(
+    MemoryController controller, Snapshot snapshot) {
   final Map<String, List<Reference>> result = {};
 
-  // Analyze the external heap for memory information
-  final root = controller.libraryRoot;
-  assert(root != null);
-
+  // Analyze the snapshot's heap memory information
+  final root = snapshot.libraryRoot;
   final heapGraph = controller.heapGraph;
 
   for (final library in root.children) {
@@ -53,7 +51,7 @@ Map<String, List<Reference>> collect(MemoryController controller) {
         if (_classMatcher(liveClass)) {
           final instances = liveClass.getInstances(heapGraph);
           externalsToAnalyze.add(external);
-          logger.log('Regex external found ${liveClass.name} '
+          debugLogger('Regex external found ${liveClass.name} '
               'instances=${instances.length} '
               'allocated bytes=$size');
         }
@@ -67,7 +65,7 @@ Map<String, List<Reference>> collect(MemoryController controller) {
           if (_classMatcher(liveClass)) {
             filtersToAnalyze.add(classRef);
             final instances = liveClass.getInstances(heapGraph);
-            logger.log('Regex filtered found ${classRef.name} '
+            debugLogger('Regex filtered found ${classRef.name} '
                 'instances=${instances.length}');
           }
         }
@@ -80,7 +78,7 @@ Map<String, List<Reference>> collect(MemoryController controller) {
         if (_classMatcher(liveClass)) {
           librariesToAnalyze.add(classRef);
           final instances = liveClass.getInstances(heapGraph);
-          logger.log('Regex library found ${classRef.name} '
+          debugLogger('Regex library found ${classRef.name} '
               'instances=${instances.length}');
         }
       }
@@ -91,15 +89,6 @@ Map<String, List<Reference>> collect(MemoryController controller) {
   }
 
   return result;
-}
-
-AnalysesReference findAnalysesNode(MemoryController controller) {
-  for (final child in controller.libraryRoot.children) {
-    if (child is AnalysesReference) {
-      return child;
-    }
-  }
-  return null;
 }
 
 const bucket10K = '1..10K';
@@ -532,9 +521,13 @@ class AnalysisInstanceViewState extends State<AnalysisInstanceViewTable>
 
   @override
   void initState() {
-    setupColumns();
-
     super.initState();
+
+    // Setup the table columns.
+    columns.addAll([
+      treeColumn,
+      _AnalysisFieldValueColumn(),
+    ]);
   }
 
   @override
@@ -550,16 +543,9 @@ class AnalysisInstanceViewState extends State<AnalysisInstanceViewTable>
     // Update the chart when the memorySource changes.
     addAutoDisposeListener(controller.selectedSnapshotNotifier, () {
       setState(() {
-        controller.computeAllLibraries(true, true);
+        controller.computeAllLibraries(rebuild: true);
       });
     });
-  }
-
-  void setupColumns() {
-    columns.addAll([
-      treeColumn,
-      _AnalysisFieldValueColumn(),
-    ]);
   }
 
   @override

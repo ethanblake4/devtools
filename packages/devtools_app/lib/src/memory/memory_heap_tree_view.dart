@@ -6,7 +6,6 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 
@@ -17,15 +16,21 @@ import '../globals.dart';
 import '../table.dart';
 import '../table_data.dart';
 import '../theme.dart';
+import '../ui/icons.dart';
 import '../ui/label.dart';
+import '../ui/search.dart';
 import '../utils.dart';
+import 'memory_allocation_table_view.dart';
 import 'memory_analyzer.dart';
 import 'memory_controller.dart';
 import 'memory_filter.dart';
 import 'memory_graph_model.dart';
-import 'memory_heatmap.dart';
+import 'memory_instance_tree_view.dart';
+import 'memory_protocol.dart';
 import 'memory_snapshot_models.dart';
-import 'memory_utils.dart';
+import 'memory_treemap.dart';
+
+final memorySearchFieldKey = GlobalKey(debugLabel: 'MemorySearchFieldKey');
 
 class HeapTree extends StatefulWidget {
   const HeapTree(
@@ -68,7 +73,8 @@ const knowClassesToAnalyzeForImages = <WildcardMatch, List<String>>{
 
   // Anything that exactly matches:
   WildcardMatch.exact: [
-    '_Int32List',
+    '_Int32List', // 32-bit devices e.g., emulators, Pixel 2, raw images as Int32List.
+    '_Int64List', // 64-bit devices e.g., Pixel 3 XL, raw images as Int64List.
     'FrameInfos',
   ],
 
@@ -115,7 +121,8 @@ String buildRegExs(Map<WildcardMatch, List<String>> matchingCriteria) {
 
 final String knownClassesRegExs = buildRegExs(knowClassesToAnalyzeForImages);
 
-class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
+class HeapTreeViewState extends State<HeapTree>
+    with AutoDisposeMixin, SearchFieldMixin {
   @visibleForTesting
   static const snapshotButtonKey = Key('Snapshot Button');
   @visibleForTesting
@@ -127,17 +134,36 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
   @visibleForTesting
   static const expandAllButtonKey = Key('Expand All Button');
   @visibleForTesting
+  static const allocationMonitorKey = Key('Allocation Monitor Start Button');
+  @visibleForTesting
+  static const allocationMonitorResetKey = Key('Accumulators Reset Button');
+  @visibleForTesting
   static const searchButtonKey = Key('Snapshot Search');
   @visibleForTesting
   static const filterButtonKey = Key('Snapshot Filter');
-  @visibleForTesting
-  static const analyzeButtonKey = Key('Snapshot Analyze');
   @visibleForTesting
   static const settingsButtonKey = Key('Snapshot Settings');
 
   MemoryController controller;
 
   Widget snapshotDisplay;
+
+  /// Used to detect a spike in memory usage.
+  MovingAverage heapMovingAverage = MovingAverage(averagePeriod: 100);
+
+  /// Number of seconds between auto snapshots because RSS is exceeded.
+  static const maxRSSExceededDurationSecs = 30;
+
+  static const minPercentIncrease = 30;
+
+  /// Timestamp of HeapSample that caused auto snapshot.
+  int spikeSnapshotTime;
+
+  /// Timestamp when RSS exceeded auto snapshot.
+  int rssSnapshotTime = 0;
+
+  /// Total memory that caused last snapshot.
+  int lastSnapshotMemoryTotal = 0;
 
   @override
   void didChangeDependencies() {
@@ -151,13 +177,19 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
 
     addAutoDisposeListener(controller.selectedSnapshotNotifier, () {
       setState(() {
-        controller.computeAllLibraries(true, true);
+        controller.computeAllLibraries(rebuild: true);
+      });
+    });
+
+    addAutoDisposeListener(controller.selectionNotifier, () {
+      setState(() {
+        controller.computeAllLibraries(rebuild: true);
       });
     });
 
     addAutoDisposeListener(controller.filterNotifier, () {
       setState(() {
-        controller.computeAllLibraries(true, true);
+        controller.computeAllLibraries(rebuild: true);
       });
     });
 
@@ -175,12 +207,25 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
 
     addAutoDisposeListener(controller.searchNotifier, () {
       setState(() {
-        closeAutoCompleteOverlay();
+        controller.closeAutoCompleteOverlay();
       });
     });
 
     addAutoDisposeListener(controller.searchAutoCompleteNotifier, () {
-      setState(autoCompleteOverlaySetState(controller, context));
+      setState(controller.autoCompleteOverlaySetState(
+        searchFieldKey: memorySearchFieldKey,
+        context: context,
+      ));
+    });
+
+    addAutoDisposeListener(controller.monitorAllocationsNotifier, () {
+      setState(() {
+        controller.computeAllLibraries(rebuild: true);
+      });
+    });
+
+    addAutoDisposeListener(controller.memoryTimeline.sampleAddedNotifier, () {
+      autoSnapshot();
     });
   }
 
@@ -193,6 +238,80 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
     rawKeyboardFocusNode.dispose();
 
     super.dispose();
+  }
+
+  /// Enable to output debugging information for auto-snapshot.
+  /// WARNING: Do not checkin with this flag set to true.
+  final debugSnapshots = false;
+
+  /// Detect spike in memory usage if so do an automatic snapshot.
+  void autoSnapshot() {
+    final heapSample = controller.memoryTimeline.sampleAddedNotifier.value;
+    final heapSum = heapSample.external + heapSample.used;
+    heapMovingAverage.add(heapSum);
+
+    final dateTimeFormat = DateFormat('hh:mm:ss.mmm');
+    final startDateTime = dateTimeFormat
+        .format(DateTime.fromMillisecondsSinceEpoch(heapSample.timestamp));
+
+    if (debugSnapshots) {
+      debugLogger('AutoSnapshot $startDateTime heapSum=$heapSum, '
+          'first=${heapMovingAverage.dataSet.first}, '
+          'mean=${heapMovingAverage.mean}');
+    }
+
+    bool takeSnapshot = false;
+    final sampleTime = Duration(milliseconds: heapSample.timestamp);
+
+    final rssExceeded = heapSum > heapSample.rss;
+    if (rssExceeded) {
+      final increase = heapSum - lastSnapshotMemoryTotal;
+      final rssPercentIncrease = lastSnapshotMemoryTotal > 0
+          ? increase / lastSnapshotMemoryTotal * 100
+          : 0;
+      final rssTime = Duration(milliseconds: rssSnapshotTime);
+      // Number of seconds since last snapshot happens because of RSS exceeded.
+      // Reduce rapid fire snapshots.
+      final rssSnapshotPeriod = (sampleTime - rssTime).inSeconds;
+      if (rssSnapshotPeriod > maxRSSExceededDurationSecs) {
+        // minPercentIncrease larger than previous auto RSS snapshot then
+        // take another snapshot.
+        if (rssPercentIncrease > minPercentIncrease) {
+          rssSnapshotTime = heapSample.timestamp;
+          lastSnapshotMemoryTotal = heapSum;
+
+          takeSnapshot = true;
+          debugLogger('AutoSnapshot - RSS exceeded '
+              '($rssPercentIncrease% increase) @ $startDateTime.');
+        }
+      }
+    }
+
+    if (!takeSnapshot && heapMovingAverage.hasSpike()) {
+      final snapshotTime =
+          Duration(milliseconds: spikeSnapshotTime ?? heapSample.timestamp);
+      spikeSnapshotTime = heapSample.timestamp;
+      takeSnapshot = true;
+      logger.log('AutoSnapshot - memory spike @ $startDateTime} '
+          'last snapshot ${(sampleTime - snapshotTime).inSeconds} seconds ago.');
+      debugLogger('               '
+          'heap @ last snapshot = $lastSnapshotMemoryTotal, '
+          'heap total=$heapSum, RSS=${heapSample.rss}');
+    }
+
+    if (takeSnapshot) {
+      assert(!heapMovingAverage.isDipping());
+      // Reset moving average for next spike.
+      heapMovingAverage.clear();
+      // TODO(terry): Should get the real sum of the snapshot not the current memory.
+      //              Snapshot can take a bit and could be a lag.
+      lastSnapshotMemoryTotal = heapSum;
+      _snapshot(userGenerated: false);
+    } else if (heapMovingAverage.isDipping()) {
+      // Reset the two things we're tracking spikes and RSS exceeded.
+      heapMovingAverage.clear();
+      lastSnapshotMemoryTotal = heapSum;
+    }
   }
 
   SnapshotStatus snapshotState = SnapshotStatus.none;
@@ -226,13 +345,10 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
                     ? 'Grouping...'
                     : _isSnapshotComplete ? 'Done' : '...'),
       ]);
-    } else if (controller.snapshotByLibraryData != null) {
-      if (controller.showHeatMap.value) {
-        snapshotDisplay = HeatMapSizeAnalyzer(
-          child: SizedBox.expand(
-            child: FlameChart(controller),
-          ),
-        );
+    } else if (controller.snapshotByLibraryData != null ||
+        controller.monitorAllocations.isNotEmpty) {
+      if (controller.showTreemap.value) {
+        snapshotDisplay = MemoryTreemap(controller);
       } else {
         snapshotDisplay = MemorySnapshotTable();
       }
@@ -246,7 +362,9 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
           children: [
             _buildSnapshotControls(textTheme),
             const Expanded(child: SizedBox(width: defaultSpacing)),
-            _buildSearchFilterControls(),
+            // TODO(peterdjlee): Implement filter and search functionality for treemap.
+            if (!controller.showTreemap.value)
+              _buildSearchFilterControls(),
           ],
         ),
         const SizedBox(height: denseRowSpacing),
@@ -263,19 +381,24 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
     final hasDetails =
         controller.isLeafSelected || controller.isAnalysisLeafSelected;
 
+    final rightSideTable = controller.isLeafSelected
+        ? Expanded(child: InstanceTreeView())
+        : controller.isAnalysisLeafSelected
+            ? Expanded(child: AnalysisInstanceViewTable())
+            : controller.isAllocationMonitorLeafSelected
+                ? Expanded(child: AllocationTableView())
+                : const SizedBox();
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
         Expanded(child: snapshotDisplay),
-        if (hasDetails) const SizedBox(width: defaultSpacing),
+        if (hasDetails)
+          const SizedBox(width: defaultSpacing),
         // TODO(terry): Need better focus handling between 2 tables & up/down
         //              arrows in the right-side field instance view table.
-        controller.isLeafSelected
-            ? Expanded(child: SnapshotInstanceViewTable())
-            : controller.isAnalysisLeafSelected
-                ? Expanded(child: AnalysisInstanceViewTable())
-                : const SizedBox(),
+        rightSideTable,
       ],
     );
   }
@@ -331,25 +454,24 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
   Widget _buildSnapshotControls(TextTheme textTheme) {
     return Row(
       children: [
-        OutlineButton(
-          key: snapshotButtonKey,
-          onPressed: _isSnapshotRunning ? null : _snapshot,
-          child: const MaterialIconLabel(
-            Icons.camera,
-            'Snapshot',
-            includeTextWidth: 200,
+        Tooltip(
+          message: 'Snapshot',
+          child: OutlineButton(
+            key: snapshotButtonKey,
+            onPressed: _isSnapshotRunning ? null : _snapshot,
+            child: createIcon(Icons.camera),
           ),
         ),
         const SizedBox(width: defaultSpacing),
         Row(
           children: [
-            const Text('Heat Map'),
+            const Text('Treemap'),
             Switch(
-              value: controller.showHeatMap.value,
+              value: controller.showTreemap.value,
               onChanged: (value) {
                 setState(() {
-                  closeAutoCompleteOverlay();
-                  controller.toggleShowHeatMap(value);
+                  controller.closeAutoCompleteOverlay();
+                  controller.toggleShowTreemap(value);
                   controller.search = '';
                   controller.selectedLeaf = null;
                 });
@@ -358,116 +480,178 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
           ],
         ),
         const SizedBox(width: defaultSpacing),
-        controller.showHeatMap.value
+        controller.showTreemap.value
             ? const SizedBox()
             : _groupByDropdown(textTheme),
         const SizedBox(width: defaultSpacing),
         // TODO(terry): Mechanism to handle expand/collapse on both
         // tables objects/fields. Maybe notion in table?
-        controller.showHeatMap.value
+        controller.showTreemap.value
             ? const SizedBox()
-            : OutlineButton(
-                key: collapseAllButtonKey,
-                onPressed: snapshotDisplay is MemorySnapshotTable
-                    ? () {
-                        if (snapshotDisplay is MemorySnapshotTable) {
-                          controller.groupByTreeTable.dataRoots
-                              .every((element) {
-                            element.collapseCascading();
-                            return true;
-                          });
-                          if (controller.instanceFieldsTreeTable != null) {
-                            // We're collapsing close the fields table.
-                            controller.selectedLeaf = null;
+            : Tooltip(
+                message: 'Collapse All',
+                child: OutlineButton(
+                  key: collapseAllButtonKey,
+                  onPressed: snapshotDisplay is MemorySnapshotTable
+                      ? () {
+                          if (snapshotDisplay is MemorySnapshotTable) {
+                            controller.groupByTreeTable.dataRoots
+                                .every((element) {
+                              element.collapseCascading();
+                              return true;
+                            });
+                            if (controller.instanceFieldsTreeTable != null) {
+                              // We're collapsing close the fields table.
+                              controller.selectedLeaf = null;
+                            }
+                            // All nodes collapsed - signal tree state changed.
+                            controller.treeChanged();
                           }
-                          setState(() {});
                         }
-                      }
-                    : null,
-                child: const Text('Collapse All'),
-              ),
-        controller.showHeatMap.value
+                      : null,
+                  child: createIcon(Icons.vertical_align_top),
+                )),
+        controller.showTreemap.value
             ? const SizedBox()
-            : OutlineButton(
-                key: expandAllButtonKey,
-                onPressed: snapshotDisplay is MemorySnapshotTable
-                    ? () {
-                        if (snapshotDisplay is MemorySnapshotTable) {
-                          controller.groupByTreeTable.dataRoots
-                              .every((element) {
-                            element.expandCascading();
-                            return true;
-                          });
-                          setState(() {});
+            : Tooltip(
+                message: 'Expand All',
+                child: OutlineButton(
+                  key: expandAllButtonKey,
+                  onPressed: snapshotDisplay is MemorySnapshotTable
+                      ? () {
+                          if (snapshotDisplay is MemorySnapshotTable) {
+                            controller.groupByTreeTable.dataRoots
+                                .every((element) {
+                              element.expandCascading();
+                              return true;
+                            });
+                          }
+                          // All nodes expanded - signal tree state  changed.
+                          controller.treeChanged();
                         }
-                      }
-                    : null,
-                child: const Text('Expand All'),
+                      : null,
+                  child: createIcon(Icons.vertical_align_bottom),
+                ),
               ),
+        const SizedBox(width: defaultSpacing),
+
+        Tooltip(
+          message: 'Monitor Allocations',
+          child: OutlineButton(
+            key: allocationMonitorKey,
+            onPressed: () async {
+              await _allocationStart();
+            },
+            child: createImageIcon(
+              // TODO(terry): Could we use a canned material icon check w/ Youyang?
+              'icons/memory/communities_white@2x.png',
+              size: defaultIconThemeSize,
+            ),
+          ),
+        ),
+        Tooltip(
+          message: 'Reset Accumulators',
+          child: OutlineButton(
+            key: allocationMonitorResetKey,
+            onPressed: () async {
+              await _allocationReset();
+            },
+            child: createImageIcon(
+              // TODO(terry): Could we use a canned material icon check w/ Youyang?
+              'icons/memory/reset_icon_white@2x.png',
+              size: defaultIconThemeSize,
+            ),
+          ),
+        ),
       ],
     );
   }
 
-  FocusNode searchFieldFocusNode;
-  TextEditingController searchTextFieldController;
-  FocusNode rawKeyboardFocusNode;
+  // WARNING: Do not checkin the debug flag set to true.
+  final _debugAllocationMonitoring = false;
 
-  void clearSearchField({force = false}) {
-    if (force || controller.search.isNotEmpty) {
-      searchTextFieldController.clear();
-      controller.search = '';
+  Future<void> _allocationStart() async {
+    // TODO(terry): Look at grouping by library or classes also filtering e.g., await controller.computeLibraries();
+    controller.memoryTimeline.addMonitorStartEvent();
+
+    final allocationtimestamp = DateTime.now();
+    final currentAllocations = await controller.getAllocationProfile();
+
+    if (controller.monitorAllocations.isNotEmpty) {
+      final previousLength = controller.monitorAllocations.length;
+      int previousIndex = 0;
+      final currentLength = currentAllocations.length;
+      int currentIndex = 0;
+      while (currentIndex < currentLength && previousIndex < previousLength) {
+        final previousAllocation = controller.monitorAllocations[previousIndex];
+        final currentAllocation = currentAllocations[currentIndex];
+
+        if (previousAllocation.classRef.id == currentAllocation.classRef.id) {
+          final instancesCurrent = currentAllocation.instancesCurrent;
+          final bytesCurrent = currentAllocation.bytesCurrent;
+
+          currentAllocation.instancesDelta = previousAllocation.instancesDelta +
+              (instancesCurrent - previousAllocation.instancesCurrent);
+          currentAllocation.bytesDelta = previousAllocation.bytesDelta +
+              (bytesCurrent - previousAllocation.bytesCurrent);
+
+          final instancesAccumulated = currentAllocation.instancesDelta;
+          final bytesAccumulated = currentAllocation.bytesDelta;
+
+          if (_debugAllocationMonitoring &&
+              (instancesAccumulated != 0 || bytesAccumulated != 0)) {
+            debugLogger('previous,index=[$previousIndex][$currentIndex] '
+                'class ${currentAllocation.classRef.name}\n'
+                '    instancesCurrent=$instancesCurrent, '
+                '    instancesAccumulated=${currentAllocation.instancesDelta}\n'
+                '    bytesCurrent=$bytesCurrent, '
+                '    bytesAccumulated=${currentAllocation.bytesDelta}}\n');
+          }
+
+          previousIndex++;
+          currentIndex++;
+        } else {
+          // Either a new class in currentAllocations or old that's no longer
+          // active in previousAllocations.
+          final currentClassId = currentAllocation.classRef.id;
+          final ClassHeapDetailStats first =
+              controller.monitorAllocations.firstWhere(
+            (element) => element.classRef.id == currentClassId,
+            orElse: () => null,
+          );
+          if (first != null) {
+            // A class that no longer exist (live or sentinel).
+            previousIndex++;
+          } else {
+            // New Class encountered in new AllocationProfile, don't increment
+            // previousIndex.
+            currentIndex++;
+          }
+        }
+      }
+
+      // Insure all entries from previous and current were looked at.
+      assert(previousLength == previousIndex);
+      assert(currentLength == currentIndex);
     }
+
+    controller.monitorTimestamp = allocationtimestamp;
+    controller.monitorAllocations = currentAllocations;
+
+    controller.treeChanged();
   }
 
-  Widget createSearchField() {
-    // Creating new TextEditingController.
-    searchFieldFocusNode = FocusNode();
+  Future<void> _allocationReset() async {
+    controller.memoryTimeline.addMonitorResetEvent();
+    final currentAllocations = await controller.resetAllocationProfile();
 
-    searchFieldFocusNode.addListener(() {
-      if (!searchFieldFocusNode.hasFocus) {
-        closeAutoCompleteOverlay();
-      }
-    });
-
-    searchTextFieldController = TextEditingController(text: controller.search);
-    searchTextFieldController.selection = TextSelection.fromPosition(
-        TextPosition(offset: controller.search.length));
-
-    final searchField = CompositedTransformTarget(
-      link: autoCompletelayerLink,
-      child: TextField(
-        key: memorySearchFieldKey,
-        autofocus: true,
-        enabled: controller.snapshots.isNotEmpty,
-        focusNode: searchFieldFocusNode,
-        controller: searchTextFieldController,
-        onChanged: (value) {
-          controller.search = value;
-        },
-        onEditingComplete: () {
-          searchFieldFocusNode.requestFocus();
-        },
-        decoration: InputDecoration(
-          contentPadding: const EdgeInsets.all(8),
-          border: const OutlineInputBorder(),
-          labelText: 'Search',
-          hintText: 'Search',
-          suffix: IconButton(
-            padding: const EdgeInsets.all(0.0),
-            onPressed: () {
-              clearSearchField();
-            },
-            icon: const Icon(Icons.clear, size: 16),
-          ),
-        ),
-      ),
-    );
-
-    if (controller.showHeatMap.value && controller.snapshots.isNotEmpty) {
-      searchFieldFocusNode.requestFocus();
+    // Reset all accumulators to zero.
+    for (final classAllocation in currentAllocations) {
+      classAllocation.bytesDelta = 0;
+      classAllocation.instancesDelta = 0;
     }
 
-    return searchField;
+    controller.monitorAllocations = currentAllocations;
   }
 
   /// Match, found,  select it and process via ValueNotifiers.
@@ -481,46 +665,10 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
       }
     });
 
-    searchTextFieldController.clear();
-    closeAutoCompleteOverlay();
-    controller.search = foundName;
-    controller.selectTheSearch = true;
-    clearSearchField(force: true);
+    selectFromSearchField(controller, foundName);
   }
 
   Widget _buildSearchFilterControls() {
-    rawKeyboardFocusNode = FocusNode();
-
-    final searchAndRawKeyboard = RawKeyboardListener(
-      child: createSearchField(),
-      focusNode: rawKeyboardFocusNode,
-      onKey: (RawKeyEvent event) {
-        if (event is RawKeyDownEvent) {
-          if (event.logicalKey.keyId == LogicalKeyboardKey.escape.keyId) {
-            // ESCAPE key pressed clear search TextField.
-            clearSearchField();
-          } else if (event.logicalKey.keyId == LogicalKeyboardKey.enter.keyId) {
-            // ENTER pressed.
-            var foundExact = false;
-            // Find exact match in autocomplete list - use that as our search value.
-            for (final autoEntry in controller.searchAutoComplete.value) {
-              if (controller.search.toLowerCase() == autoEntry.toLowerCase()) {
-                foundExact = true;
-                selectTheMatch(autoEntry);
-              }
-            }
-            // Nothing found, pick first line in dropdown.
-            if (!foundExact) {
-              final autoCompleteList = controller.searchAutoComplete.value;
-              if (autoCompleteList.isNotEmpty) {
-                selectTheMatch(autoCompleteList.first);
-              }
-            }
-          }
-        }
-      },
-    );
-
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.end,
@@ -529,30 +677,22 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
           // TODO(terry): Use a more adaptive layout than forcing to 300.0
           width: defaultSearchTextWidth,
           height: defaultSearchTextHeight,
-          child: searchAndRawKeyboard,
-        ),
-        const SizedBox(width: denseSpacing),
-        Flexible(
-          child: OutlineButton(
-            key: filterButtonKey,
-            onPressed: _filter,
-            child: const MaterialIconLabel(
-              Icons.filter_list,
-              'Filter',
-              includeTextWidth: 200,
-            ),
+          child: buildAutoCompleteSearchField(
+            controller: controller,
+            searchFieldKey: memorySearchFieldKey,
+            searchFieldEnabled: controller.snapshots.isNotEmpty,
+            shouldRequestFocus:
+                controller.showTreemap.value && controller.snapshots.isNotEmpty,
+            onSelection: selectTheMatch,
           ),
         ),
         const SizedBox(width: denseSpacing),
-        Flexible(
+        Tooltip(
+          message: 'Filter',
           child: OutlineButton(
-            key: analyzeButtonKey,
-            onPressed: controller.enableAnalyzeButton() ? _analyze : null,
-            child: const MaterialIconLabel(
-              Icons.highlight,
-              'Analyze',
-              includeTextWidth: 200,
-            ),
+            key: filterButtonKey,
+            onPressed: _filter,
+            child: createIcon(Icons.filter_list),
           ),
         ),
         // TODO: Add these back in when _settings() is implemented.
@@ -570,9 +710,19 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
     );
   }
 
-  void _snapshot() async {
+  void _snapshot({userGenerated = true}) async {
     // VmService not available (disconnected/crashed).
     if (serviceManager.service == null) return;
+
+    // Another snapshot in progress, don't stall the world. An auto-snapshot
+    // is probably in progress.
+    if (snapshotState != SnapshotStatus.none &&
+        snapshotState != SnapshotStatus.done) {
+      debugLogger('Snapshop in progress - ignoring this request.');
+      return;
+    }
+
+    controller.memoryTimeline.addSnapshotEvent(auto: !userGenerated);
 
     setState(() {
       snapshotState = SnapshotStatus.streaming;
@@ -583,7 +733,13 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
     final graph = await controller.snapshotMemory();
 
     // No snapshot collected, disconnected/crash application.
-    if (graph == null) return;
+    if (graph == null) {
+      setState(() {
+        snapshotState = SnapshotStatus.done;
+      });
+      controller.selectedSnapshotTimestamp = DateTime.now();
+      return;
+    }
 
     final snapshotCollectionTime = DateTime.now();
 
@@ -600,33 +756,40 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
     );
     final snapshotGraphTime = DateTime.now();
 
-    controller.storeSnapshot(snapshotTimestamp, graph);
-
     setState(() {
       snapshotState = SnapshotStatus.grouping;
     });
 
     await doGroupBy();
-    controller.computeAllLibraries();
+
+    final root = controller.computeAllLibraries(graph: graph);
+
+    final snapshot = controller.storeSnapshot(
+      snapshotTimestamp,
+      graph,
+      root,
+      autoSnapshot: !userGenerated,
+    );
+
     final snapshotDoneTime = DateTime.now();
 
-    controller.selectedSnapshotTimestamp =
-        DateFormat('dd-MMM-yyyy@H:m.s').format(snapshotTimestamp);
+    controller.selectedSnapshotTimestamp = snapshotTimestamp;
 
-    updateListOfSnapshotsUnderAnalysisNode();
-
-    logger.log('Total Snapshot completed in'
+    debugLogger('Total Snapshot completed in'
         ' ${snapshotDoneTime.difference(snapshotTimestamp).inMilliseconds / 1000} seconds');
-    logger.log('  Snapshot collected in'
+    debugLogger('  Snapshot collected in'
         ' ${snapshotCollectionTime.difference(snapshotTimestamp).inMilliseconds / 1000} seconds');
-    logger.log('  Snapshot graph built in'
+    debugLogger('  Snapshot graph built in'
         ' ${snapshotGraphTime.difference(snapshotCollectionTime).inMilliseconds / 1000} seconds');
-    logger.log('  Snapshot grouping/libraries computed in'
+    debugLogger('  Snapshot grouping/libraries computed in'
         ' ${snapshotDoneTime.difference(snapshotGraphTime).inMilliseconds / 1000} seconds');
 
     setState(() {
       snapshotState = SnapshotStatus.done;
     });
+
+    controller.buildTreeFromAllData();
+    _analyze(snapshot: snapshot);
   }
 
   Future<void> doGroupBy() async {
@@ -643,62 +806,48 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
     );
   }
 
-  void updateListOfSnapshotsUnderAnalysisNode() {
-    final AnalysesReference analysesNode = findAnalysesNode(controller);
-    assert(analysesNode != null);
-
-    for (final snapshot in controller.snapshots) {
-      final currentSnapDT = snapshot.collectedTimestamp;
-
-      if (analysesNode.children.length == 1) {
-        final node = analysesNode.children.first;
-        if (node is AnalysisReference && node.name.isEmpty) {
-          setState(() {
-            analysesNode.collapse();
-            analysesNode.children.clear();
-          });
-        }
+  void _debugCheckAnalyses(DateTime currentSnapDateTime) {
+    // Debug only check.
+    assert(() {
+      // Analysis already completed we're done.
+      final foundMatch = controller.completedAnalyses.firstWhere(
+        (element) => element.dateTime.compareTo(currentSnapDateTime) == 0,
+        orElse: () => null,
+      );
+      if (foundMatch != null) {
+        logger.log(
+          'Analysis '
+          '${MemoryController.formattedTimestamp(currentSnapDateTime)} '
+          'already computed.',
+          logger.LogLevel.warning,
+        );
       }
-
-      AnalysisSnapshotReference analyzeSnapshot;
-      final foundAnalysis = controller.completedAnalyses
-          .where((analysis) => analysis.dateTime == currentSnapDT);
-      if (foundAnalysis.isNotEmpty) {
-        // If there's an analysis of this snapshot then show it.
-        analyzeSnapshot = foundAnalysis.single;
-      } else {
-        analyzeSnapshot = AnalysisSnapshotReference(currentSnapDT);
-      }
-
-      analysesNode.addChild(analyzeSnapshot);
-    }
+      return true;
+    }());
   }
 
-  void _analyze() {
-    final AnalysesReference analysesNode = findAnalysesNode(controller);
+  void _analyze({Snapshot snapshot}) {
+    final AnalysesReference analysesNode = controller.findAnalysesNode();
     assert(analysesNode != null);
 
-    final currentSnapDT = controller.snapshots.last.collectedTimestamp;
+    snapshot ??= controller.computeSnapshotToAnalyze;
+    final currentSnapDateTime = snapshot?.collectedTimestamp;
 
-    // If an analysis of the current snapshot exist then do nothing.
-    final foundSnapshot = analysesNode.children.where((analysis) {
-      if (analysis is AnalysisSnapshotReference) {
-        final AnalysisSnapshotReference node = analysis;
-        return node.dateTime == currentSnapDT;
-      }
-      return false;
-    });
+    _debugCheckAnalyses(currentSnapDateTime);
 
-    if (foundSnapshot.isNotEmpty && foundSnapshot.first.children.isNotEmpty) {
-      // TODO(terry): Disable Analyze button if analysis exist for current snapshot.
-      logger.log('Analysis already computed.', logger.LogLevel.warning);
-      return;
+    // If there's an empty place holder than remove it. First analysis will
+    // exist shortly.
+    if (analysesNode.children.length == 1 &&
+        analysesNode.children.first.name.isEmpty) {
+      analysesNode.children.clear();
     }
 
-    // Analyze this snapshot.
-    final analyzeSnapshot = foundSnapshot.single;
+    // Create analysis node to hold analysis results.
+    final analyzeSnapshot = AnalysisSnapshotReference(currentSnapDateTime);
+    analysesNode.addChild(analyzeSnapshot);
 
-    final collectedData = collect(controller);
+    // Analyze this snapshot.
+    final collectedData = collect(controller, snapshot);
 
     // Analyze the collected data.
 
@@ -719,11 +868,6 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
       nodeIndex: analyzeSnapshot.index,
       scrollIntoView: true,
     );
-
-    // TODO(terry): Could be done if completedAnalyses was a ValueNotifier.
-    //              Although still an empty setState in didChangeDependencies.
-    // Rebuild Analyze button.
-    setState(() {});
   }
 
   // ignore: unused_element
@@ -732,158 +876,7 @@ class HeapTreeViewState extends State<HeapTree> with AutoDisposeMixin {
   }
 }
 
-class SnapshotInstanceViewTable extends StatefulWidget {
-  @override
-  SnapshotInstanceViewState createState() => SnapshotInstanceViewState();
-}
-
-/// Table of the fields of an instance (type, name and value).
-class SnapshotInstanceViewState extends State<SnapshotInstanceViewTable>
-    with AutoDisposeMixin {
-  MemoryController controller;
-
-  final TreeColumnData<FieldReference> treeColumn = _FieldTypeColumn();
-  final List<ColumnData<FieldReference>> columns = [];
-
-  @override
-  void initState() {
-    setupColumns();
-
-    super.initState();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-
-    final newController = Provider.of<MemoryController>(context);
-    if (newController == controller) return;
-    controller = newController;
-
-    cancel();
-
-    // Update the chart when the memorySource changes.
-    addAutoDisposeListener(controller.selectedSnapshotNotifier, () {
-      setState(() {
-        controller.computeAllLibraries(true, true);
-      });
-    });
-  }
-
-  void setupColumns() {
-    columns.addAll([
-      treeColumn,
-      _FieldNameColumn(),
-      _FieldValueColumn(),
-    ]);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    controller.instanceFieldsTreeTable = TreeTable<FieldReference>(
-      dataRoots: controller.instanceRoot,
-      columns: columns,
-      treeColumn: treeColumn,
-      keyFactory: (typeRef) => PageStorageKey<String>(typeRef.name),
-      sortColumn: columns[0],
-      sortDirection: SortDirection.ascending,
-    );
-
-    return controller.instanceFieldsTreeTable;
-  }
-}
-
-class _FieldTypeColumn extends TreeColumnData<FieldReference> {
-  _FieldTypeColumn() : super('Type');
-
-  @override
-  dynamic getValue(FieldReference dataObject) =>
-      dataObject.isEmptyReference || dataObject.isSentinelReference
-          ? ''
-          : dataObject.type;
-
-  @override
-  String getDisplayValue(FieldReference dataObject) =>
-      '${getValue(dataObject)}';
-
-  @override
-  bool get supportsSorting => true;
-
-  @override
-  int compare(FieldReference a, FieldReference b) {
-    final Comparable valueA = getValue(a);
-    final Comparable valueB = getValue(b);
-    return valueA.compareTo(valueB);
-  }
-
-  @override
-  double get fixedWidthPx => 250.0;
-}
-
-class _FieldNameColumn extends ColumnData<FieldReference> {
-  _FieldNameColumn() : super('Name');
-
-  @override
-  dynamic getValue(FieldReference dataObject) =>
-      dataObject.isEmptyReference ? '' : dataObject.name;
-
-  @override
-  String getDisplayValue(FieldReference dataObject) =>
-      '${getValue(dataObject)}';
-
-  @override
-  bool get supportsSorting => true;
-
-  @override
-  int compare(FieldReference a, FieldReference b) {
-    final Comparable valueA = getValue(a);
-    final Comparable valueB = getValue(b);
-    return valueA.compareTo(valueB);
-  }
-
-  @override
-  double get fixedWidthPx => 150.0;
-}
-
-class _FieldValueColumn extends ColumnData<FieldReference> {
-  _FieldValueColumn() : super('Value');
-
-  @override
-  dynamic getValue(FieldReference dataObject) =>
-      dataObject.isEmptyReference || dataObject.isSentinelReference
-          ? ''
-          : dataObject.value;
-
-  @override
-  String getDisplayValue(FieldReference dataObject) {
-    if (dataObject is ObjectFieldReference && !dataObject.isNull) {
-      // Real object that isn't Null value is empty string.
-      return '';
-    }
-
-    var value = getValue(dataObject);
-    if (value is String && value.length > 30) {
-      value = '${value.substring(0, 13)}…${value.substring(value.length - 17)}';
-    }
-    return '$value';
-  }
-
-  @override
-  bool get supportsSorting => true;
-
-  @override
-  int compare(FieldReference a, FieldReference b) {
-    final Comparable valueA = getValue(a);
-    final Comparable valueB = getValue(b);
-    return valueA.compareTo(valueB);
-  }
-
-  @override
-  double get fixedWidthPx => 250.0;
-}
-
 /// Snapshot TreeTable
-
 class MemorySnapshotTable extends StatefulWidget {
   @override
   MemorySnapshotTableState createState() => MemorySnapshotTableState();
@@ -899,9 +892,15 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
 
   @override
   void initState() {
-    setupColumns();
-
     super.initState();
+
+    // Setup the table columns.
+    columns.addAll([
+      treeColumn,
+      _ClassOrInstanceCountColumn(),
+      _ShallowSizeColumn(),
+      _RetainedSizeColumn(),
+    ]);
   }
 
   @override
@@ -914,15 +913,23 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
 
     cancel();
 
-    // Update the chart when the memorySource changes.
+    // Update the tree when the tree state changes e.g., expand, collapse, etc.
+    addAutoDisposeListener(controller.treeChangedNotifier, () {
+      if (controller.isTreeChanged) {
+        setState(() {});
+      }
+    });
+
+    // Update the tree when the memorySource changes.
     addAutoDisposeListener(controller.selectedSnapshotNotifier, () {
       setState(() {
-        controller.computeAllLibraries(true, true);
+        controller.computeAllLibraries(rebuild: true);
       });
     });
+
     addAutoDisposeListener(controller.filterNotifier, () {
       setState(() {
-        controller.computeAllLibraries(true, true);
+        controller.computeAllLibraries(rebuild: true);
       });
     });
 
@@ -931,7 +938,7 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
     addAutoDisposeListener(controller.selectTheSearchNotifier, () {
       if (_trySelectItem()) {
         setState(() {
-          closeAutoCompleteOverlay();
+          controller.closeAutoCompleteOverlay();
         });
       }
     });
@@ -939,7 +946,7 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
     addAutoDisposeListener(controller.searchNotifier, () {
       if (_trySelectItem()) {
         setState(() {
-          closeAutoCompleteOverlay();
+          controller.closeAutoCompleteOverlay();
         });
       }
     });
@@ -965,7 +972,8 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
 
       switch (controller.groupingBy.value) {
         case MemoryController.groupByLibrary:
-          for (final reference in controller.groupByTreeTable.dataRoots) {
+          final searchRoot = controller.activeSnapshot;
+          for (final reference in searchRoot.children) {
             if (reference.isLibrary) {
               matches.addAll(matchesInLibrary(reference, searchingValue));
             } else if (reference.isExternals) {
@@ -1067,22 +1075,37 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
   bool selectItemInTree(String searchingValue) {
     switch (controller.groupingBy.value) {
       case MemoryController.groupByLibrary:
-        for (final reference in controller.groupByTreeTable.dataRoots) {
+        final searchRoot = controller.activeSnapshot;
+        if (controller.selectionNotifier.value.node == null) {
+          // No selected node, then select the snapshot we're searching.
+          controller.selectionNotifier.value = Selection(
+            node: searchRoot,
+            nodeIndex: searchRoot.index,
+            scrollIntoView: true,
+          );
+        }
+        for (final reference in searchRoot.children) {
           if (reference.isLibrary) {
             final foundIt = _selectItemInTree(reference, searchingValue);
-            if (foundIt) return true;
+            if (foundIt) {
+              return true;
+            }
           } else if (reference.isFiltered) {
             // Matches in the filtered nodes.
             final FilteredReference filteredReference = reference;
             for (final library in filteredReference.children) {
               final foundIt = _selectItemInTree(library, searchingValue);
-              if (foundIt) return true;
+              if (foundIt) {
+                return true;
+              }
             }
           } else if (reference.isExternals) {
             final ExternalReferences refs = reference;
             for (final ExternalReference external in refs.children) {
               final foundIt = _selectItemInTree(external, searchingValue);
-              if (foundIt) return true;
+              if (foundIt) {
+                return true;
+              }
             }
           }
         }
@@ -1133,33 +1156,27 @@ class MemorySnapshotTableState extends State<MemorySnapshotTable>
     return false;
   }
 
-  void setupColumns() {
-    columns.addAll([
-      treeColumn,
-      _ClassOrInstanceCountColumn(),
-      _ShallowSizeColumn(),
-      _RetainedSizeColumn(),
-    ]);
-  }
-
   @override
   Widget build(BuildContext context) {
-    LibraryReference root = controller.computeAllLibraries();
-    if (controller.groupingBy.value == MemoryController.groupByClass) {
-      root = controller.classRoot;
+    final root = controller.buildTreeFromAllData();
+
+    if (root != null) {
+      // Snapshots and analyses exists display the trees.
+      controller.groupByTreeTable = TreeTable<Reference>(
+        dataRoots: root.children,
+        columns: columns,
+        treeColumn: treeColumn,
+        keyFactory: (libRef) => PageStorageKey<String>(libRef.name),
+        sortColumn: columns[0],
+        sortDirection: SortDirection.ascending,
+        selectionNotifier: controller.selectionNotifier,
+      );
+
+      return controller.groupByTreeTable;
+    } else {
+      // Nothing collected yet (snapshots/analyses) - return an empty area.
+      return const SizedBox();
     }
-
-    controller.groupByTreeTable = TreeTable<Reference>(
-      dataRoots: root.children,
-      columns: columns,
-      treeColumn: treeColumn,
-      keyFactory: (libRef) => PageStorageKey<String>(libRef.name),
-      sortColumn: columns[0],
-      sortDirection: SortDirection.ascending,
-      selectionNotifier: controller.selectionNotifier,
-    );
-
-    return controller.groupByTreeTable;
   }
 }
 
@@ -1182,7 +1199,6 @@ class _LibraryRefColumn extends TreeColumnData<Reference> {
     } else {
       value = dataObject.name;
     }
-
     return value;
   }
 
@@ -1209,68 +1225,62 @@ class _ClassOrInstanceCountColumn extends ColumnData<Reference> {
   dynamic getValue(Reference dataObject) {
     assert(!dataObject.isEmptyReference);
 
+    // Although the method returns dynamic this implementatation only
+    // returns int.
+
     if (dataObject.name == MemoryController.libraryRootNode ||
-        dataObject.name == MemoryController.classRootNode) return '';
+        dataObject.name == MemoryController.classRootNode) return 0;
 
-    if (dataObject.isExternals) {
-      if (dataObject.hasCount) return dataObject.count;
+    var count = 0;
 
-      var count = 0;
-      for (ExternalReference externalRef in dataObject.children) {
-        count += externalRef.children.length;
-      }
-      return count;
-    } else if (dataObject.isExternal) {
-      return dataObject.children.length;
-    } else if (dataObject.isFiltered) {
-      int sum = 0;
-      final FilteredReference filteredRef = dataObject;
-      for (final LibraryReference child in filteredRef.children) {
-        for (final HeapGraphClassLive liveClass in child.actualClasses) {
-          // Have the instances been realized (null implies no)
-          if (liveClass.instancesCount != null) {
-            sum += liveClass.instancesCount;
-          }
-        }
-      }
-
-      return sum;
+    if (dataObject.isExternal) {
+      count = dataObject.children.length;
     } else if (dataObject.isAnalysis && dataObject is AnalysisReference) {
       final AnalysisReference analysisReference = dataObject;
-      final count = analysisReference.countNote;
-      return count == null ? '' : count;
+      count = analysisReference.countNote;
+    } else if (dataObject.isSnapshot && dataObject is SnapshotReference) {
+      final SnapshotReference snapshotRef = dataObject;
+      for (final child in snapshotRef.children) {
+        count += _computeCount(child);
+      }
+    } else {
+      count = _computeCount(dataObject);
     }
 
-    final count = _computeCount(dataObject);
-
-    return count == null ? '--' : count;
+    return count;
   }
 
-  /// Return of null implies count can't be computed.
+  /// Return a count based on the Reference type e.g., library, filtered,
+  /// class, externals, etc.  Only compute once, store in the Reference.
   int _computeCount(Reference ref) {
     // Only compute the children counts once then store in the Reference.
     if (ref.hasCount) return ref.count;
 
-    int count;
+    var count = 0;
 
     if (ref.isClass) {
       final ClassReference classRef = ref;
       count = _computeClassInstances(classRef.actualClass);
     } else if (ref.isLibrary) {
-      count = 0;
       // Return number of classes.
       final LibraryReference libraryReference = ref;
       for (final heapClass in libraryReference.actualClasses) {
         count += _computeClassInstances(heapClass);
       }
     } else if (ref.isFiltered) {
-      count = 0;
       final FilteredReference filteredRef = ref;
       for (final LibraryReference child in filteredRef.children) {
         for (final heapClass in child.actualClasses) {
           count += _computeClassInstances(heapClass);
         }
       }
+    } else if (ref.isExternals) {
+      for (ExternalReference externalRef in ref.children) {
+        count += externalRef.children.length;
+      }
+    } else if (ref.isExternal) {
+      final ExternalReference externalRef = ref;
+      count = externalRef.children.length;
     }
 
     // Only compute once.
@@ -1282,8 +1292,12 @@ class _ClassOrInstanceCountColumn extends ColumnData<Reference> {
   int _computeClassInstances(HeapGraphClassLive liveClass) =>
       liveClass.instancesCount != null ? liveClass.instancesCount : null;
 
+  /// Internal helper for all count values.
+  String _displayCount(int count) => count == null ? '--' : '$count';
+
   @override
-  String getDisplayValue(Reference dataObject) => '${getValue(dataObject)}';
+  String getDisplayValue(Reference dataObject) =>
+      _displayCount(getValue(dataObject));
 
   @override
   bool get supportsSorting => true;
@@ -1323,50 +1337,66 @@ class _ShallowSizeColumn extends ColumnData<Reference> {
 
     if (dataObject.name == MemoryController.libraryRootNode ||
         dataObject.name == MemoryController.classRootNode) {
-      final snapshotGraph = dataObject.controller.snapshots.last.snapshotGraph;
+      final snapshot = dataObject.controller.getSnapshot(dataObject);
+      final snapshotGraph = snapshot.snapshotGraph;
       return snapshotGraph.shallowSize + snapshotGraph.externalSize;
     }
 
-    if (dataObject.isLibrary) {
+    if (dataObject.isAnalysis && dataObject is AnalysisReference) {
+      final AnalysisReference analysisReference = dataObject;
+      final size = analysisReference.sizeNote;
+      return size ?? '';
+    } else if (dataObject.isSnapshot && dataObject is SnapshotReference) {
+      var sum = 0;
+      final SnapshotReference snapshotRef = dataObject;
+      for (final childRef in snapshotRef.children) {
+        sum += _sumShallowSize(childRef);
+      }
+      return sum;
+    } else {
+      final sum = _sumShallowSize(dataObject);
+      return sum ?? '';
+    }
+  }
+
+  dynamic _sumShallowSize(Reference ref) {
+    if (ref.isLibrary) {
       // Return number of classes.
-      final libraryReference = dataObject as LibraryReference;
+      final LibraryReference libraryReference = ref;
       var sum = 0;
       for (final actualClass in libraryReference.actualClasses) {
         sum += actualClass.instancesTotalShallowSizes;
       }
       return sum;
-    } else if (dataObject.isClass) {
-      final classReference = dataObject as ClassReference;
+    } else if (ref.isClass) {
+      final classReference = ref as ClassReference;
       return classReference.actualClass.instancesTotalShallowSizes;
-    } else if (dataObject.isObject) {
+    } else if (ref.isObject) {
       // Return number of instances.
-      final objectReference = dataObject as ObjectReference;
+      final objectReference = ref as ObjectReference;
 
       var size = objectReference.instance.origin.shallowSize;
 
       // If it's an external object then return the externalSize too.
-      if (dataObject is ExternalObjectReference) {
-        final ExternalObjectReference externalRef = dataObject;
+      if (ref is ExternalObjectReference) {
+        final ExternalObjectReference externalRef = ref;
         size += externalRef.externalSize;
       }
 
       return size;
-    } else if (dataObject.isFiltered) {
-      final sum =
-          sizeAllVisibleLibraries(dataObject.controller.libraryRoot.children);
-      final snapshotGraph = dataObject.controller.snapshots.last.snapshotGraph;
+    } else if (ref.isFiltered) {
+      final snapshot = ref.controller.getSnapshot(ref);
+      final sum = sizeAllVisibleLibraries(snapshot?.libraryRoot?.children);
+      final snapshotGraph = snapshot.snapshotGraph;
       return snapshotGraph.shallowSize - sum;
-    } else if (dataObject.isExternals) {
-      return dataObject.controller.snapshots.last.snapshotGraph.externalSize;
-    } else if (dataObject.isExternal) {
-      return (dataObject as ExternalReference).sumExternalSizes;
-    } else if (dataObject.isAnalysis && dataObject is AnalysisReference) {
-      final AnalysisReference analysisReference = dataObject;
-      final size = analysisReference.sizeNote;
-      return size == null ? '' : size;
+    } else if (ref.isExternals) {
+      final snapshot = ref.controller.getSnapshot(ref);
+      return snapshot.snapshotGraph.externalSize;
+    } else if (ref.isExternal) {
+      return (ref as ExternalReference).sumExternalSizes;
     }
 
-    return '';
+    return null;
   }
 
   @override
@@ -1380,7 +1410,10 @@ class _ShallowSizeColumn extends ColumnData<Reference> {
     final displayPercentage = percentage < .050 ? '<<1%' : '${NumberFormat.compact().format(percentage)}%';
     print('$displayPercentage [${NumberFormat.compact().format(percentage)}%]');
 */
-    if (dataObject.isAnalysis && value is! int) return '';
+    if ((dataObject.isAnalysis ||
+            dataObject.isAllocations ||
+            dataObject.isAllocation) &&
+        value is! int) return '';
 
     return NumberFormat.compact().format(value);
   }
@@ -1426,7 +1459,7 @@ class _RetainedSizeColumn extends ColumnData<Reference> {
       final objectReference = dataObject as ObjectReference;
       return objectReference.instance.origin.shallowSize;
     } else if (dataObject.isExternals) {
-      return dataObject.controller.snapshots.last.snapshotGraph.externalSize;
+      return dataObject.controller.lastSnapshot.snapshotGraph.externalSize;
     } else if (dataObject.isExternal) {
       return (dataObject as ExternalReference)
           .liveExternal

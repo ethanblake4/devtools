@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'package:intl/intl.dart';
 import 'package:vm_service/vm_service.dart';
 
 import '../trees.dart';
@@ -20,118 +19,182 @@ const emptyName = '<empty>';
 const sentinelName = '<sentinel>';
 
 class Reference extends TreeNode<Reference> {
-  Reference._empty()
-      : controller = null,
-        name = emptyName,
-        isAnalysis = false,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = false,
-        isClass = false,
-        isObject = false,
-        actualClass = null;
+  factory Reference({
+    MemoryController argController,
+    HeapGraphClassLive argActualClass,
+    String argName,
+    bool argIsAllocation = false,
+    bool argIsAllocations = false,
+    bool argIsAnalysis = false,
+    bool argIsSnapshot = false,
+    bool argIsLibrary = false,
+    bool argIsExternals = false,
+    bool argIsExternal = false,
+    bool argIsFiltered = false,
+    bool argIsClass = false,
+    bool argIsObject = false,
+    Function argOnExpand,
+    Function argOnLeaf,
+  }) {
+    return Reference._internal(
+      controller: argController,
+      actualClass: argActualClass,
+      name: argName,
+      isAllocation: argIsAllocation,
+      isAllocations: argIsAllocations,
+      isAnalysis: argIsAnalysis,
+      isSnapshot: argIsSnapshot,
+      isLibrary: argIsLibrary,
+      isExternals: argIsExternals,
+      isFiltered: argIsFiltered,
+      isClass: argIsClass,
+      isObject: argIsObject,
+      onExpand: argOnExpand,
+      onLeaf: argOnLeaf,
+    );
+  }
 
-  Reference._sentinel()
-      : controller = null,
-        name = sentinelName,
-        isAnalysis = false,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = false,
-        isClass = false,
-        isObject = false,
-        actualClass = null;
+  Reference._internal({
+    this.controller,
+    this.actualClass,
+    this.name,
+    this.isAllocation = false,
+    this.isAllocations = false,
+    this.isAnalysis = false,
+    this.isSnapshot = false,
+    this.isLibrary = false,
+    this.isExternals = false,
+    this.isExternal = false,
+    this.isFiltered = false,
+    this.isClass = false,
+    this.isObject = false,
+    this.onExpand,
+    this.onLeaf,
+  });
 
-  Reference.analysis(this.controller, this.name, {this.onExpand, this.onLeaf})
-      : isAnalysis = true,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = false,
-        isClass = false,
-        isObject = false,
-        actualClass = null;
+  factory Reference._empty() => Reference._internal(name: emptyName);
 
-  Reference.library(this.controller, this.name, {this.onExpand, this.onLeaf})
-      : isAnalysis = false,
-        isLibrary = true,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = false,
-        isClass = false,
-        isObject = false,
-        actualClass = null;
+  factory Reference._sentinel() => Reference._internal(name: sentinelName);
+
+  Reference.allocationsMonitor(
+    String name, {
+    Function onExpand,
+    Function onLeaf,
+  }) : this._internal(
+          controller: null,
+          name: name,
+          isAllocations: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
+
+  Reference.allocationMonitor(MemoryController controller, String name,
+      {Function onExpand, Function onLeaf})
+      : this._internal(
+          controller: controller,
+          name: name,
+          isAllocation: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
+
+  Reference.analysis(
+    MemoryController controller,
+    String name, {
+    Function onExpand,
+    Function onLeaf,
+  }) : this._internal(
+          controller: controller,
+          name: name,
+          isAnalysis: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
+
+  Reference.snapshot(
+    MemoryController controller,
+    String name, {
+    Function onExpand,
+    Function onLeaf,
+  }) : this._internal(
+          controller: controller,
+          name: name,
+          isSnapshot: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
+
+  Reference.library(
+    MemoryController controller,
+    String name, {
+    Function onExpand,
+    Function onLeaf,
+  }) : this._internal(
+          controller: controller,
+          name: name,
+          isLibrary: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
 
   Reference.aClass(
-    this.controller,
-    this.actualClass, {
-    this.onExpand,
-    this.onLeaf,
-  })  : isAnalysis = false,
-        name = actualClass.name,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = false,
-        isClass = true,
-        isObject = false;
+    MemoryController controller,
+    HeapGraphClassLive actualClass, {
+    Function onExpand,
+    Function onLeaf,
+  }) : this._internal(
+          controller: controller,
+          actualClass: actualClass,
+          name: actualClass.name,
+          isClass: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
 
-  /// name is the object name.
+  /// Name is the object name.
   Reference.object(
-    this.controller,
-    this.name, {
-    this.onExpand,
-    this.onLeaf,
-  })  : isAnalysis = false,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = false,
-        isClass = false,
-        isObject = true,
-        actualClass = null;
+    MemoryController controller,
+    String name, {
+    Function onExpand,
+    Function onLeaf,
+  }) : this._internal(
+          controller: controller,
+          name: name,
+          isObject: true,
+          onExpand: onExpand,
+          onLeaf: onLeaf,
+        );
 
   /// External heap
   Reference.externals(
-    this.controller, {
-    this.onExpand,
-  })  : isAnalysis = false,
-        isLibrary = false,
-        isExternals = true,
-        isExternal = false,
-        isFiltered = false,
-        isClass = false,
-        isObject = false,
-        actualClass = null,
-        name = externalLibraryName;
+    MemoryController controller, {
+    Function onExpand,
+  }) : this._internal(
+          controller: controller,
+          name: externalLibraryName,
+          isExternals: true,
+          onExpand: onExpand,
+        );
 
   /// External objects
   Reference.external(
-    this.controller,
-    this.name, {
-    this.onExpand,
-  })  : isAnalysis = false,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = true,
-        isFiltered = false,
-        isClass = false,
-        isObject = false,
-        actualClass = null;
+    MemoryController controller,
+    String name, {
+    Function onExpand,
+  }) : this._internal(
+          controller: controller,
+          name: name,
+          isExternal: true,
+          onExpand: onExpand,
+        );
 
   /// All filtered libraries and classes
-  Reference.filtered(this.controller)
-      : isAnalysis = false,
-        isLibrary = false,
-        isExternals = false,
-        isExternal = false,
-        isFiltered = true,
-        isClass = false,
-        isObject = false,
-        actualClass = null,
-        name = filteredLibrariesName;
+  Reference.filtered(MemoryController controller)
+      : this._internal(
+          controller: controller,
+          name: filteredLibrariesName,
+          isFiltered: true,
+        );
 
   static Reference empty = Reference._empty();
 
@@ -147,7 +210,16 @@ class Reference extends TreeNode<Reference> {
 
   final String name;
 
+  /// Allocations are being monitored, user requested monitoring of any
+  /// allocated memory.  Parent node containing all monitored classes.
+  final bool isAllocations;
+
+  /// A monitored class.
+  final bool isAllocation;
+
   final bool isAnalysis;
+
+  final bool isSnapshot;
 
   final bool isLibrary;
 
@@ -185,16 +257,28 @@ class Reference extends TreeNode<Reference> {
   void leaf() {
     if (isObject) {
       final objectReference = this as ObjectReference;
-      if (controller.selectedAnalysisLeaf != null) {
+      if (controller.selectedAnalysisLeaf != null ||
+          controller.selectedAllocationMonitorLeaf != null) {
         controller.selectedAnalysisLeaf = null;
+        controller.selectedAllocationMonitorLeaf = null;
       }
       controller.selectedLeaf = objectReference.instance;
     } else if (isAnalysis && this is AnalysisInstance) {
       final AnalysisInstance analysisInstance = this as AnalysisInstance;
-      if (controller.selectedLeaf != null) {
+      if (controller.selectedLeaf != null ||
+          controller.selectedAllocationMonitorLeaf != null) {
         controller.selectedLeaf = null;
+        controller.selectedAllocationMonitorLeaf = null;
       }
       controller.selectedAnalysisLeaf = analysisInstance;
+    } else if (isAllocation) {
+      final AllocationMonitorReference monitor =
+          this as AllocationMonitorReference;
+      if (controller.selectedAllocationMonitorLeaf != null) {
+        controller.selectedLeaf = null;
+        controller.selectedAnalysisLeaf = null;
+      }
+      controller.selectedAllocationMonitorLeaf = monitor;
     }
 
     if (onLeaf != null) onLeaf(this);
@@ -203,20 +287,27 @@ class Reference extends TreeNode<Reference> {
   }
 }
 
+class AllocationsMonitorReference extends Reference {
+  AllocationsMonitorReference()
+      : super.allocationsMonitor('Allocation Monitors');
+}
+
+class AllocationMonitorReference extends Reference {
+  AllocationMonitorReference(MemoryController controller, this.dateTime)
+      : super.allocationMonitor(
+          controller,
+          'Monitor ${MemoryController.formattedTimestamp(dateTime)}',
+        );
+
+  DateTime dateTime;
+}
+
 /// Container of all snapshot analyses processed.
 class AnalysesReference extends Reference {
   AnalysesReference()
       : super.analysis(
           null,
           'Analysis',
-/*
-          onExpand: (Reference reference) {
-            assert(reference.isAnalysis);
-            print("TBD");
-          },onLeaf: (ObjectReference reference) {
-            print("Clicking on analysis node");
-          }
-*/
         );
 }
 
@@ -226,19 +317,8 @@ class AnalysisSnapshotReference extends Reference {
     this.dateTime,
   ) : super.analysis(
           null,
-          'Snapshot ${_formatter.format(dateTime)}',
-/*
-          onExpand: (Reference reference) {
-            assert(reference.isAnalysis);
-            print("TBD");
-          },
-          onLeaf: (ObjectReference reference) {
-            print("Clicking on analysis node");
-          },
-*/
+          'Analyzed ${MemoryController.formattedTimestamp(dateTime)}',
         );
-
-  static final _formatter = DateFormat('MMM dd HH:mm:ss');
 
   final DateTime dateTime;
 }
@@ -290,6 +370,27 @@ class AnalysisField extends TreeNode<AnalysisField> {
 
   final String name;
   final String value;
+}
+
+/// Snapshot being analyzed.
+class SnapshotReference extends Reference {
+  SnapshotReference(this.snapshot)
+      : super.snapshot(
+          null,
+          title(snapshot),
+        );
+
+  static String title(Snapshot snapshot) {
+    if (snapshot == null) return '';
+
+    final timestamp = snapshot.collectedTimestamp;
+    final displayTimestamp = MemoryController.formattedTimestamp(timestamp);
+    return snapshot.autoSnapshot
+        ? 'Snapshot $displayTimestamp Auto'
+        : 'Snapshot $displayTimestamp';
+  }
+
+  final Snapshot snapshot;
 }
 
 class LibraryReference extends Reference {
@@ -434,11 +535,15 @@ class Snapshot {
     this.collectedTimestamp,
     this.controller,
     this.snapshotGraph,
+    this.libraryRoot,
+    this.autoSnapshot,
   );
 
+  final bool autoSnapshot;
   final MemoryController controller;
   final DateTime collectedTimestamp;
   final HeapSnapshotGraph snapshotGraph;
+  LibraryReference libraryRoot;
 
   final Map<String, LibraryReference> libraries = {};
 

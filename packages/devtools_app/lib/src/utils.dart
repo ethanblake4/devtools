@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
@@ -13,10 +14,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart' as url_launcher;
 import 'package:vm_service/vm_service.dart';
 
-import 'package:url_launcher/url_launcher.dart' as url_launcher;
-
+import 'config_specific/logger/logger.dart' as logger;
 import 'notifications.dart';
 
 bool collectionEquals(e1, e2) => const DeepCollectionEquality().equals(e1, e2);
@@ -64,17 +65,51 @@ final NumberFormat nf = NumberFormat.decimalPattern();
 
 String percent2(double d) => '${(d * 100).toStringAsFixed(2)}%';
 
-final NumberFormat _kbPattern = NumberFormat.decimalPattern()
-  ..maximumFractionDigits = 0;
-
-String printKb(num bytes) {
-  // We add ((1024/2)-1) to the value before formatting so that a non-zero byte
-  // value doesn't round down to 0.
-  return _kbPattern.format((bytes + 511) / 1024);
+String prettyPrintBytes(
+  num bytes, {
+  int kbFractionDigits = 0,
+  int mbFractionDigits = 1,
+  bool includeUnit = false,
+}) {
+  // TODO(peterdjlee): Generalize to handle different kbFractionDigits.
+  // Ensure a small number of bytes does not print as 0 KB.
+  // If bytes >= 52 and kbFractionDigits == 1, it will start rounding to 0.1 KB.
+  if (bytes.abs() < 52 && kbFractionDigits == 1) {
+    var output = bytes.toString();
+    if (includeUnit) {
+      output += ' B';
+    }
+    return output;
+  }
+  final sizeInKB = bytes.abs() / 1024.0;
+  if (sizeInKB < 1024.0) {
+    return '${printKB(bytes, fractionDigits: kbFractionDigits, includeUnit: includeUnit)}';
+  } else {
+    return '${printMB(bytes, fractionDigits: mbFractionDigits, includeUnit: includeUnit)}';
+  }
 }
 
-String printMb(num bytes, [int fractionDigits = 1]) {
-  return (bytes / (1024 * 1024.0)).toStringAsFixed(fractionDigits);
+String printKB(num bytes, {int fractionDigits = 0, bool includeUnit = false}) {
+  final NumberFormat _kbPattern = NumberFormat.decimalPattern()
+    ..maximumFractionDigits = fractionDigits;
+
+  // We add ((1024/2)-1) to the value before formatting so that a non-zero byte
+  // value doesn't round down to 0. If showing decimal points, let it round normally.
+  // TODO(peterdjlee): Round up to the respective digit when fractionDigits > 0.
+  final processedBytes = fractionDigits == 0 ? bytes + 511 : bytes;
+  var output = _kbPattern.format(processedBytes / 1024);
+  if (includeUnit) {
+    output += ' KB';
+  }
+  return output;
+}
+
+String printMB(num bytes, {int fractionDigits = 1, bool includeUnit = false}) {
+  var output = (bytes / (1024 * 1024.0)).toStringAsFixed(fractionDigits);
+  if (includeUnit) {
+    output += ' MB';
+  }
+  return output;
 }
 
 String msText(
@@ -245,6 +280,40 @@ Stream combineStreams(Stream a, Stream b, Stream c) {
   );
 
   return controller.stream;
+}
+
+/// Parses a 3 or 6 digit CSS Hex Color into a dart:ui Color.
+Color parseCssHexColor(String input) {
+  // Remove any leading # (and the escaped version to be lenient)
+  input = input.replaceAll('#', '').replaceAll('%23', '');
+
+  // Handle 3/4-digit hex codes (eg. #123 == #112233)
+  if (input.length == 3 || input.length == 4) {
+    input = input.split('').map((c) => '$c$c').join();
+  }
+
+  // Pad alpha with FF.
+  if (input.length == 6) {
+    input = '${input}ff';
+  }
+
+  // In CSS, alpha is in the lowest bits, but for Flutter's value, it's in the
+  // highest bits, so move the alpha from the end to the start before parsing.
+  if (input.length == 8) {
+    input = '${input.substring(6)}${input.substring(0, 6)}';
+  }
+  final value = int.parse(input, radix: 16);
+
+  return Color(value);
+}
+
+/// Converts a dart:ui Color into #RRGGBBAA format for use in CSS.
+String toCssHexColor(Color color) {
+  // In CSS Hex, Alpha comes last, but in Flutter's `value` field, alpha is
+  // in the high bytes, so just using `value.toRadixString(16)` will put alpha
+  // in the wrong position.
+  String hex(int val) => val.toRadixString(16).padLeft(2, '0');
+  return '#${hex(color.red)}${hex(color.green)}${hex(color.blue)}${hex(color.alpha)}';
 }
 
 class Property<T> {
@@ -476,6 +545,10 @@ class TimeRange {
   int get hashCode => hashValues(start, end);
 }
 
+String formatDateTime(DateTime time) {
+  return DateFormat('h:mm:ss.S a').format(time);
+}
+
 bool isDebugBuild() {
   bool debugBuild = false;
   assert((() {
@@ -693,6 +766,80 @@ class DebugTimingLogger {
   }
 }
 
+/// Compute a simple moving average.
+/// [averagePeriod] default period is 50 units collected.
+/// [ratio] default percentage is 50% range is 0..1
+class MovingAverage {
+  MovingAverage({
+    this.averagePeriod = 50,
+    this.ratio = .5,
+    List<int> newDataSet,
+  }) : assert(ratio >= 0 && ratio <= 1, 'Value ratio $ratio is not 0 to 1.') {
+    if (newDataSet != null) {
+      var initialDataSet = newDataSet;
+      final count = newDataSet.length;
+      if (count > averagePeriod) {
+        initialDataSet = newDataSet.sublist(count - averagePeriod);
+      }
+
+      dataSet.addAll(initialDataSet);
+      for (final value in dataSet) {
+        averageSum += value;
+      }
+    }
+  }
+
+  final dataSet = Queue<int>();
+
+  /// Total collected items in the X axis (time) used to compute moving average.
+  /// Default 100 periods for memory profiler 1-2 periods / seconds.
+  final int averagePeriod;
+
+  /// Ratio of first item in dataSet when comparing to last - mean
+  /// e.g., 2 is 50% (dataSet.first ~/ ratioSpike).
+  final double ratio;
+
+  /// Sum of total heap used and external heap for unitPeriod.
+  int averageSum = 0;
+
+  /// Reset moving average data.
+  void clear() {
+    dataSet.clear();
+    averageSum = 0;
+  }
+
+  // Update the sum to get a new mean.
+  void add(int value) {
+    averageSum += value;
+    dataSet.add(value);
+
+    // Update dataSet of values to not exceede the period of the moving average
+    // to compute the normal mean.
+    if (dataSet.length > averagePeriod) {
+      averageSum -= dataSet.removeFirst();
+    }
+  }
+
+  double get mean {
+    final periodRange = min(averagePeriod, dataSet.length);
+    return periodRange > 0 ? averageSum / periodRange : 0;
+  }
+
+  /// If the last - mean > ratioSpike% of first value in period we're spiking.
+  bool hasSpike() {
+    final first = dataSet.safeFirst ?? 0;
+    final last = dataSet.safeLast ?? 0;
+
+    return last - mean > (first * ratio);
+  }
+
+  /// If the mean @ ratioSpike% > last value in period we're dipping.
+  bool isDipping() {
+    final last = dataSet.safeLast ?? 0;
+    return (mean * ratio) > last;
+  }
+}
+
 Future<void> launchUrl(String url, BuildContext context) async {
   if (await url_launcher.canLaunch(url)) {
     await url_launcher.launch(url);
@@ -795,3 +942,39 @@ extension LogicalKeySetExtension on LogicalKeySet {
 
 // Method to convert degrees to radians
 num degToRad(num deg) => deg * (pi / 180.0);
+
+typedef DevToolsJsonFileHandler = void Function(DevToolsJsonFile file);
+
+class DevToolsJsonFile extends DevToolsFile<Object> {
+  const DevToolsJsonFile({
+    @required String name,
+    @required DateTime lastModifiedTime,
+    @required Object data,
+  }) : super(
+          path: name,
+          lastModifiedTime: lastModifiedTime,
+          data: data,
+        );
+}
+
+class DevToolsFile<T> {
+  const DevToolsFile({
+    @required this.path,
+    @required this.lastModifiedTime,
+    @required this.data,
+  });
+  final String path;
+
+  final DateTime lastModifiedTime;
+
+  final T data;
+}
+
+/// Logging to debug console only in debug runs.
+void debugLogger(String message) {
+  // Debug only check.
+  assert(() {
+    logger.log('$message');
+    return true;
+  }());
+}

@@ -10,7 +10,10 @@ import 'package:pedantic/pedantic.dart';
 import 'package:provider/provider.dart';
 
 import '../devtools.dart' as devtools;
+import 'code_size/code_size_controller.dart';
+import 'code_size/code_size_screen.dart';
 import 'common_widgets.dart';
+import 'config_specific/ide_theme/ide_theme.dart';
 import 'connect_screen.dart';
 import 'debugger/debugger_controller.dart';
 import 'debugger/debugger_screen.dart';
@@ -42,11 +45,12 @@ const snapshotRoute = '/snapshot';
 /// Top-level configuration for the app.
 @immutable
 class DevToolsApp extends StatefulWidget {
-  const DevToolsApp(this.screens, this.preferences, this.routeSettings);
+  const DevToolsApp(this.screens, this.preferences, this.routeSettings, this.ideTheme);
 
   final List<DevToolsScreen> screens;
   final PreferencesController preferences;
   final RouteSettings routeSettings;
+  final IdeTheme ideTheme;
 
   @override
   State<DevToolsApp> createState() => DevToolsAppState();
@@ -66,6 +70,7 @@ class DevToolsAppState extends State<DevToolsApp> {
   List<Screen> get _screens => widget.screens.map((s) => s.screen).toList();
 
   PreferencesController get preferences => widget.preferences;
+  IdeTheme get ideTheme => widget.ideTheme;
 
   @override
   void initState() {
@@ -113,6 +118,7 @@ class DevToolsAppState extends State<DevToolsApp> {
       builder: (BuildContext context) {
         return DevToolsScaffold.withChild(
           child: CenteredMessage("'$uri' not found."),
+          ideTheme: ideTheme,
         );
       },
     );
@@ -125,29 +131,47 @@ class DevToolsAppState extends State<DevToolsApp> {
         if (params['uri']?.isNotEmpty ?? false) {
           final embed = params['embed'] == 'true';
           final page = params['page'];
-          final tabs =
-              embed && page != null ? _visibleScreens().where((p) => p.screenId == page).toList() : _visibleScreens();
+
           return Initializer(
             url: params['uri'],
             allowConnectionScreenOnDisconnect: !embed,
-            builder: (_) => _providedControllers(
-              child: DevToolsScaffold(
-                embed: embed,
-                initialPage: page,
-                tabs: tabs,
-                actions: [
-                  if (serviceManager.connectedApp.isFlutterAppNow) ...[
-                    HotReloadButton(),
-                    HotRestartButton(),
+            builder: (_) {
+              final tabs = embed && page != null
+                  ? _visibleScreens().where((p) => p.screenId == page).toList()
+                  : _visibleScreens();
+              if (tabs.isEmpty) {
+                return DevToolsScaffold.withChild(
+                  child: CenteredMessage('The "$page" screen is not available for this application.'),
+                  ideTheme: ideTheme,
+                );
+              }
+              return _providedControllers(
+                child: DevToolsScaffold(
+                  embed: embed,
+                  ideTheme: ideTheme,
+                  initialPage: page,
+                  tabs: tabs,
+                  actions: [
+                    if (serviceManager.connectedApp.isFlutterAppNow) ...[
+                      HotReloadButton(),
+                      HotRestartButton(),
+                    ],
+                    OpenSettingsAction(),
+                    OpenAboutAction(),
                   ],
-                  OpenSettingsAction(),
-                  OpenAboutAction(),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           );
         } else {
-          return DevToolsScaffold.withChild(child: ConnectScreenBody());
+          return DevToolsScaffold.withChild(
+            child: ConnectScreenBody(),
+            ideTheme: ideTheme,
+            actions: [
+              OpenSettingsAction(),
+              OpenAboutAction(),
+            ],
+          );
         }
       },
       snapshotRoute: (_, __, args) {
@@ -156,6 +180,7 @@ class DevToolsAppState extends State<DevToolsApp> {
             offline: true,
             child: SnapshotScreenBody(args, _screens),
           ),
+          ideTheme: ideTheme,
         );
       },
     };
@@ -167,21 +192,7 @@ class DevToolsAppState extends State<DevToolsApp> {
     _routes = null;
   }
 
-  List<Screen> _visibleScreens() {
-    final visibleScreens = <Screen>[];
-    for (var screen in _screens) {
-      if (screen.conditionalLibrary != null) {
-        if (serviceManager.isServiceAvailable &&
-            serviceManager.isolateManager.selectedIsolateAvailable.isCompleted &&
-            serviceManager.libraryUriAvailableNow(screen.conditionalLibrary)) {
-          visibleScreens.add(screen);
-        }
-      } else {
-        visibleScreens.add(screen);
-      }
-    }
-    return visibleScreens;
-  }
+  List<Screen> _visibleScreens() => _screens.where(shouldShowScreen).toList();
 
   Widget _providedControllers({@required Widget child, bool offline = false}) {
     final _providers = widget.screens
@@ -197,7 +208,12 @@ class DevToolsAppState extends State<DevToolsApp> {
 
   @override
   Widget build(BuildContext context) {
-    return _generateRoute(widget.routeSettings);
+    return ValueListenableBuilder(
+      valueListenable: widget.preferences.darkModeTheme,
+      builder: (context, value, _) {
+        return _generateRoute(widget.routeSettings);
+      },
+    );
   }
 }
 
@@ -445,6 +461,11 @@ List<DevToolsScreen> get defaultScreens => <DevToolsScreen>[
         const LoggingScreen(),
         createController: () => LoggingController(),
       ),
+      if (codeSizeScreenEnabled)
+        DevToolsScreen<CodeSizeController>(
+          const CodeSizeScreen(),
+          createController: () => CodeSizeController(),
+        ),
 // Uncomment to see a sample implementation of a conditional screen.
 //      DevToolsScreen<ExampleController>(
 //        const ExampleConditionalScreen(),

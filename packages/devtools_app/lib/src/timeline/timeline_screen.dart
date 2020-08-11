@@ -32,14 +32,19 @@ import 'timeline_model.dart';
 // where applicable.
 
 class TimelineScreen extends Screen {
-  const TimelineScreen() : super(id, title: 'Timeline', icon: Octicons.pulse);
+  const TimelineScreen()
+      : super.conditional(
+          id: id,
+          requiresDartVm: true,
+          worksOffline: true,
+          title: 'Timeline',
+          icon: Octicons.pulse,
+        );
 
   @visibleForTesting
   static const refreshButtonKey = Key('Refresh Button');
   @visibleForTesting
   static const clearButtonKey = Key('Clear Button');
-  @visibleForTesting
-  static const emptyTimelineKey = Key('Empty Timeline');
   @visibleForTesting
   static const exportButtonKey = Key('Export Button');
 
@@ -49,11 +54,7 @@ class TimelineScreen extends Screen {
   String get docPageId => id;
 
   @override
-  Widget build(BuildContext context) {
-    return offlineMode || !serviceManager.connectedApp.isDartWebAppNow
-        ? const TimelineScreenBody()
-        : const DisabledForWebAppMessage();
-  }
+  Widget build(BuildContext context) => const TimelineScreenBody();
 }
 
 class TimelineScreenBody extends StatefulWidget {
@@ -158,7 +159,10 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
             axis: Axis.vertical,
             initialFractions: const [0.6, 0.4],
             children: [
-              _buildFlameChartSection(),
+              TimelineFlameChartContainer(
+                processing: processing,
+                processingProgress: processingProgress,
+              ),
               ValueListenableBuilder(
                 valueListenable: controller.selectedTimelineEvent,
                 builder: (context, selectedEvent, _) {
@@ -264,48 +268,6 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
     showDialog(
       context: context,
       builder: (context) => TimelineConfigurationsDialog(controller),
-    );
-  }
-
-  Widget _buildFlameChartSection() {
-    Widget content;
-    final timelineEmpty = (controller.data?.isEmpty ?? true) ||
-        controller.data.eventGroups.isEmpty;
-    if (processing || timelineEmpty) {
-      content = ValueListenableBuilder<bool>(
-        valueListenable: controller.emptyTimeline,
-        builder: (context, emptyRecording, _) {
-          return emptyRecording
-              ? const Center(
-                  key: TimelineScreen.emptyTimelineKey,
-                  child: Text('No timeline events'),
-                )
-              : _buildProcessingInfo();
-        },
-      );
-    } else {
-      content = LayoutBuilder(
-        builder: (context, constraints) {
-          return TimelineFlameChart(
-            controller.data,
-            width: constraints.maxWidth,
-            selectionNotifier: controller.selectedTimelineEvent,
-            onSelection: (e) => controller.selectTimelineEvent(e),
-          );
-        },
-      );
-    }
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: OutlineDecoration(child: content),
-    );
-  }
-
-  Widget _buildProcessingInfo() {
-    return processingInfo(
-      progressValue: processingProgress,
-      processedObject: 'timeline trace',
     );
   }
 
