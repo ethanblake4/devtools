@@ -8,6 +8,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:vm_service/vm_service.dart' hide Stack;
 
+import '../analytics/analytics_stub.dart'
+    if (dart.library.html) '../analytics/analytics.dart' as ga;
 import '../auto_dispose_mixin.dart';
 import '../banner_messages.dart';
 import '../common_widgets.dart';
@@ -23,6 +25,9 @@ import '../theme.dart';
 import '../ui/vm_flag_widgets.dart';
 import 'performance_controller.dart';
 
+final performanceSearchFieldKey =
+    GlobalKey(debugLabel: 'PerformanceSearchFieldKey');
+
 class PerformanceScreen extends Screen {
   const PerformanceScreen()
       : super.conditional(
@@ -33,14 +38,6 @@ class PerformanceScreen extends Screen {
           icon: Octicons.dashboard,
         );
 
-  @visibleForTesting
-  static const clearButtonKey = Key('Clear Button');
-  @visibleForTesting
-  static const recordButtonKey = Key('Record Button');
-  @visibleForTesting
-  static const stopRecordingButtonKey = Key('Stop Recording Button');
-  @visibleForTesting
-  static const exportButtonKey = Key('Export Button');
   @visibleForTesting
   static const recordingInstructionsKey = Key('Recording Instructions');
   @visibleForTesting
@@ -76,6 +73,12 @@ class _PerformanceScreenBodyState extends State<PerformanceScreenBody>
   bool processing = false;
 
   double processingProgress = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    ga.screen(PerformanceScreen.id);
+  }
 
   @override
   void didChangeDependencies() {
@@ -150,6 +153,7 @@ class _PerformanceScreenBodyState extends State<PerformanceScreenBody>
               return CpuProfiler(
                 data: cpuProfileData,
                 controller: controller.cpuProfilerController,
+                searchFieldKey: performanceSearchFieldKey,
               );
             },
           ),
@@ -167,9 +171,7 @@ class _PerformanceScreenBodyState extends State<PerformanceScreenBody>
         if (loadingOfflineData)
           Container(
             color: Theme.of(context).scaffoldBackgroundColor,
-            child: const Center(
-              child: CircularProgressIndicator(),
-            ),
+            child: const CenteredCircularProgressIndicator(),
           ),
       ],
     );
@@ -188,25 +190,21 @@ class _PerformanceScreenBodyState extends State<PerformanceScreenBody>
   Widget _buildPrimaryStateControls() {
     return Row(
       children: [
-        recordButton(
-          key: PerformanceScreen.recordButtonKey,
+        RecordButton(
           recording: recording,
           includeTextWidth: _primaryControlsMinIncludeTextWidth,
           onPressed: controller.startRecording,
         ),
         const SizedBox(width: denseSpacing),
-        stopRecordingButton(
-          key: PerformanceScreen.stopRecordingButtonKey,
+        StopRecordingButton(
           recording: recording,
           includeTextWidth: _primaryControlsMinIncludeTextWidth,
           onPressed: controller.stopRecording,
         ),
         const SizedBox(width: defaultSpacing),
-        clearButton(
-          key: PerformanceScreen.clearButtonKey,
-          busy: recording,
+        ClearButton(
           includeTextWidth: _primaryControlsMinIncludeTextWidth,
-          onPressed: controller.clear,
+          onPressed: recording ? null : controller.clear,
         ),
       ],
     );
@@ -219,7 +217,6 @@ class _PerformanceScreenBodyState extends State<PerformanceScreenBody>
         const ProfileGranularityDropdown(PerformanceScreen.id),
         const SizedBox(width: defaultSpacing),
         ExportButton(
-          key: PerformanceScreen.exportButtonKey,
           onPressed: controller.cpuProfileData != null &&
                   !controller.cpuProfileData.isEmpty
               ? _exportPerformance
@@ -231,7 +228,7 @@ class _PerformanceScreenBodyState extends State<PerformanceScreenBody>
   }
 
   Widget _buildRecordingInfo() {
-    return recordingInfo(
+    return RecordingInfo(
       instructionsKey: PerformanceScreen.recordingInstructionsKey,
       recordingStatusKey: PerformanceScreen.recordingStatusKey,
       recording: recording,

@@ -5,14 +5,13 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
-import 'app.dart';
 import 'auto_dispose_mixin.dart';
+import 'common_widgets.dart';
 import 'framework/framework_core.dart';
 import 'globals.dart';
-import 'inspector/flutter_widget.dart';
 import 'notifications.dart';
+import 'routing.dart';
 import 'url_utils.dart';
 
 /// Widget that requires business logic to be loaded before building its
@@ -58,23 +57,12 @@ class _InitializerState extends State<Initializer>
   /// change between successive calls.
   bool _checkLoaded() => serviceManager.hasConnection;
 
-  bool _dependenciesLoaded = false;
-
   OverlayEntry currentDisconnectedOverlay;
   StreamSubscription<bool> disconnectedOverlayReconnectSubscription;
 
   @override
   void initState() {
     super.initState();
-
-    /// Ensure that we loaded the inspector dependencies before attempting to
-    /// build the Provider.
-    ensureInspectorDependencies().then((_) {
-      if (!mounted) return;
-      setState(() {
-        _dependenciesLoaded = true;
-      });
-    });
 
     // If we become disconnected, attempt to reconnect.
     autoDispose(
@@ -92,6 +80,16 @@ class _InitializerState extends State<Initializer>
     );
 
     _attemptUrlConnection();
+  }
+
+  @override
+  void didUpdateWidget(Initializer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // Handle widget rebuild when the URL has changed.
+    if (widget.url != null && widget.url != oldWidget.url) {
+      _attemptUrlConnection();
+    }
   }
 
   Future<void> _attemptUrlConnection() async {
@@ -152,7 +150,8 @@ class _InitializerState extends State<Initializer>
                 RaisedButton(
                     onPressed: () {
                       hideDisconnectedOverlay();
-                      Navigator.of(context).popAndPushNamed(homeRoute);
+                      DevToolsRouterDelegate.of(context)
+                          .navigate(homePageId, {'uri': null});
                     },
                     child: const Text('Connect to Another App'))
               else
@@ -175,25 +174,10 @@ class _InitializerState extends State<Initializer>
 
   @override
   Widget build(BuildContext context) {
-    return _checkLoaded() && _dependenciesLoaded
+    return _checkLoaded()
         ? widget.builder(context)
         : const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
+            body: CenteredCircularProgressIndicator(),
           );
-  }
-}
-
-/// Loads the widgets.json file from Flutter's [rootBundle].
-///
-/// This will fail if called in a test run with `--platform chrome`.
-/// Tests that call this method should be annotated `@TestOn('vm')`.
-Future<void> ensureInspectorDependencies() async {
-  // TODO(jacobr): move this rootBundle loading code into
-  // InspectorController once the dart:html app is removed and Flutter
-  // conventions for loading assets can be the default.
-  if (Catalog.instance == null) {
-    final json = await rootBundle.loadString('web/widgets.json');
-    // ignore: invalid_use_of_visible_for_testing_member
-    Catalog.setCatalog(Catalog.decode(json));
   }
 }

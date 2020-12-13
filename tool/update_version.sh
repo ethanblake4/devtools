@@ -29,20 +29,23 @@ pushd packages
 # We could use LAST_VERSION instead of allowing any previous version
 
 # Update the version of all packages.
-perl -pi -e "s/^(\\W*version:) [0-9.dev-]+/\$1 $VERSION/g" $PUBSPECS
+perl -pi -e "s/^(\\W*version:) [0-9.dev\-+]+/\$1 $VERSION/g" $PUBSPECS
 
 # Update all references to package versions
-perl -pi -e "s/^(\\W*devtools_shared:) \\^?[0-9.dev-]+/\$1 $VERSION/g" $PUBSPECS
-perl -pi -e "s/^(\\W*devtools_server:) \\^?[0-9.dev-]+/\$1 $VERSION/g" $PUBSPECS
-perl -pi -e "s/^(\\W*devtools:) \\^?[0-9.dev-]+/\$1 $VERSION/g" $PUBSPECS
-perl -pi -e "s/^(\\W*devtools_app:) \\^?[0-9.dev-]+/\$1 $VERSION/g" $PUBSPECS
-perl -pi -e "s/^(\\W*devtools_testing:) \\^?[0-9.dev-]+/\$1 $VERSION/g" $PUBSPECS
+perl -pi -e "s/^(\\W*devtools_shared:) \\^?[0-9\.dev\-+]+/\$1 $VERSION/g" $PUBSPECS
+perl -pi -e "s/^(\\W*devtools_server:) \\^?[0-9\.dev\-+]+/\$1 $VERSION/g" $PUBSPECS
+perl -pi -e "s/^(\\W*devtools:) \\^?[0-9\.dev\-+]+/\$1 $VERSION/g" $PUBSPECS
+perl -pi -e "s/^(\\W*devtools_app:) \\^?[0-9\.dev\-+]+/\$1 $VERSION/g" $PUBSPECS
+perl -pi -e "s/^(\\W*devtools_testing:) \\^?[0-9\.dev\-+]+/\$1 $VERSION/g" $PUBSPECS
 
 # Update version defined in the source code in devtools_app.
-perl -pi -e "s/^(\\W*const String version =) '[0-9.dev-]+'/\$1 '$VERSION'/g" ./devtools_app/lib/devtools.dart
+perl -pi -e "s/^(\\W*const String version =) '[0-9.dev\-+]+'/\$1 '$VERSION'/g" ./devtools_app/lib/devtools.dart
 
 popd
 
 NEW_VERSION="$(sed -n -e 's/^.*version: //p' packages/devtools_app/pubspec.yaml)"
 echo "Updated version to: $NEW_VERSION"
+
+echo "Running pub upgrade on all packages"
+tool/pub_upgrade.sh
 

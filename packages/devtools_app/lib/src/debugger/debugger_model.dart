@@ -278,20 +278,14 @@ class FileNode extends TreeNode<FileNode> {
     final root = FileNode('<root>');
 
     for (var script in scripts) {
-      var parts = script.uri.split('/');
-
-      // Look for and handle dotted package names.
-      if (parts.isNotEmpty && parts.first.contains('.')) {
-        parts = [
-          ...parts.first.split('.'),
-          ...parts.sublist(1),
-        ];
-      }
+      final directoryParts = ScriptRefUtils.splitDirectoryParts(script);
 
       FileNode node = root;
-      for (var name in parts) {
+
+      for (var name in directoryParts) {
         node = node._getCreateChild(name);
       }
+
       node.scriptRef = script;
     }
 
@@ -316,6 +310,66 @@ class FileNode extends TreeNode<FileNode> {
 
     for (var child in children) {
       child._trimChildrenAsMapEntries();
+    }
+  }
+
+  @override
+  int get hashCode => scriptRef?.hashCode ?? name.hashCode;
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! FileNode) return false;
+    final FileNode node = other;
+
+    if (scriptRef == null) {
+      return node.scriptRef != null ? false : name == node.name;
+    } else {
+      return node.scriptRef == null ? false : scriptRef == node.scriptRef;
+    }
+  }
+}
+
+class ScriptRefUtils {
+  /// Return the Uri for the given ScriptRef split into path segments.
+  ///
+  /// This is useful for converting a flat list of scripts into a directory tree
+  /// structure.
+  static List<String> splitDirectoryParts(ScriptRef scriptRef) {
+    final uri = Uri.parse(scriptRef.uri);
+    final scheme = uri.scheme;
+    var parts = uri.path.split('/');
+
+    // handle google3:///foo/bar
+    if (parts.first.isEmpty) {
+      parts = parts.where((part) => part.isNotEmpty).toList();
+      // Combine the first non-empty path segment with the scheme:
+      // 'google3:foo'.
+      parts = [
+        '$scheme:${parts.first}',
+        ...parts.sublist(1),
+      ];
+    } else if (parts.first.contains('.')) {
+      // Look for and handle dotted package names (package:foo.bar).
+      final dottedParts = parts.first.split('.');
+      parts = [
+        '$scheme:${dottedParts.first}',
+        ...dottedParts.sublist(1),
+        ...parts.sublist(1),
+      ];
+    } else {
+      parts = [
+        '$scheme:${parts.first}',
+        ...parts.sublist(1),
+      ];
+    }
+
+    if (parts.length > 1) {
+      return [
+        parts.first,
+        parts.sublist(1).join('/'),
+      ];
+    } else {
+      return parts;
     }
   }
 }

@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'package:devtools_app/src/common_widgets.dart';
 import 'package:devtools_app/src/globals.dart';
 import 'package:devtools_app/src/performance/performance_controller.dart';
 import 'package:devtools_app/src/performance/performance_screen.dart';
@@ -22,10 +23,11 @@ void main() {
 
   group('PerformanceScreen', () {
     setUp(() async {
-      fakeServiceManager = FakeServiceManager(useFakeService: true);
+      fakeServiceManager = FakeServiceManager();
       when(fakeServiceManager.connectedApp.isDartWebAppNow).thenReturn(false);
       when(fakeServiceManager.connectedApp.isDebugFlutterAppNow)
           .thenReturn(false);
+      when(fakeServiceManager.connectedApp.isDartCliAppNow).thenReturn(true);
       setGlobal(ServiceConnectionManager, fakeServiceManager);
       screen = const PerformanceScreen();
     });
@@ -34,10 +36,9 @@ void main() {
       PerformanceScreenBody perfScreenBody,
       WidgetTester tester,
     ) {
-      expect(find.byKey(PerformanceScreen.recordButtonKey), findsOneWidget);
-      expect(
-          find.byKey(PerformanceScreen.stopRecordingButtonKey), findsOneWidget);
-      expect(find.byKey(PerformanceScreen.clearButtonKey), findsOneWidget);
+      expect(find.byType(RecordButton), findsOneWidget);
+      expect(find.byType(StopRecordingButton), findsOneWidget);
+      expect(find.byType(ClearButton), findsOneWidget);
       expect(find.byType(ProfileGranularityDropdown), findsOneWidget);
       expect(find.byKey(PerformanceScreen.recordingInstructionsKey),
           findsOneWidget);
@@ -76,7 +77,7 @@ void main() {
         verifyBaseState(perfScreenBody, tester);
 
         // Start recording.
-        await tester.tap(find.byKey(PerformanceScreen.recordButtonKey));
+        await tester.tap(find.byType(RecordButton));
         await tester.pump();
         expect(find.byKey(PerformanceScreen.recordingInstructionsKey),
             findsNothing);
@@ -86,13 +87,13 @@ void main() {
         expect(find.byType(CpuProfiler), findsNothing);
 
         // Stop recording.
-        await tester.tap(find.byKey(PerformanceScreen.stopRecordingButtonKey));
+        await tester.tap(find.byType(StopRecordingButton));
         await tester.pumpAndSettle();
         expect(find.byType(CircularProgressIndicator), findsNothing);
         expect(find.byType(CpuProfiler), findsOneWidget);
 
         // Clear the profile.
-        await tester.tap(find.byKey(PerformanceScreen.clearButtonKey));
+        await tester.tap(find.byType(ClearButton));
         await tester.pump();
         verifyBaseState(perfScreenBody, tester);
       },
@@ -108,10 +109,9 @@ void main() {
         find.byKey(PerformanceScreen.recordingInstructionsKey),
         findsNothing,
       );
-      expect(find.byKey(PerformanceScreen.recordButtonKey), findsNothing);
-      expect(
-          find.byKey(PerformanceScreen.stopRecordingButtonKey), findsNothing);
-      expect(find.byKey(PerformanceScreen.clearButtonKey), findsNothing);
+      expect(find.byType(RecordButton), findsNothing);
+      expect(find.byType(StopRecordingButton), findsNothing);
+      expect(find.byType(ClearButton), findsNothing);
       expect(find.byType(ProfileGranularityDropdown), findsNothing);
 
       await tester.tap(find.text('Enable profiler'));

@@ -21,6 +21,7 @@ import '../service_manager.dart';
 import '../trace_event.dart';
 import '../trees.dart';
 import '../ui/search.dart';
+import '../utils.dart';
 import 'timeline_model.dart';
 import 'timeline_processor.dart';
 import 'timeline_screen.dart';
@@ -127,14 +128,14 @@ class TimelineController
   /// This list is cleared and repopulated each time "Refresh" is clicked.
   List<TraceEventWrapper> allTraceEvents = [];
 
-  /// Tracks the longest frame portion (UI or Raster) time for the current
-  /// timeline data.
-  ///
-  /// This is used by [FlutterFramesChart] when calculating the scale for the
-  /// chart's Y axis.
-  int longestFramePortionMs = 0;
+  Future<void> _timelineStarted;
+  Future<void> get timelineStarted => _timelineStarted;
 
-  void _startTimeline() async {
+  Future<void> _startTimeline() {
+    return _timelineStarted = _startTimelineHelper();
+  }
+
+  Future<void> _startTimelineHelper() async {
     await serviceManager.onServiceAvailable;
     unawaited(allowedError(
       _cpuProfilerService.setProfilePeriod(mediumProfilePeriod),
@@ -149,7 +150,7 @@ class TimelineController
 
     // Initialize displayRefreshRate.
     _displayRefreshRate.value =
-        await serviceManager.getDisplayRefreshRate() ?? defaultRefreshRate;
+        await serviceManager.queryDisplayRefreshRate ?? defaultRefreshRate;
     data?.displayRefreshRate = _displayRefreshRate.value;
   }
 
@@ -210,21 +211,14 @@ class TimelineController
   }
 
   void addFrame(TimelineFrame frame) {
-    // Ensure we start tracking [longestFramePortionMs] at 0.
-    if (data.frames.isEmpty) longestFramePortionMs = 0;
-
     data.frames.add(frame);
-    if (frame.uiDurationMs > longestFramePortionMs ||
-        frame.rasterDurationMs > longestFramePortionMs) {
-      longestFramePortionMs = frame.time.duration.inMilliseconds;
-    }
   }
 
   Future<void> refreshData() async {
     await clearData(clearVmTimeline: false);
     data = serviceManager.connectedApp.isFlutterAppNow
         ? TimelineData(
-            displayRefreshRate: await serviceManager.getDisplayRefreshRate())
+            displayRefreshRate: await serviceManager.queryDisplayRefreshRate)
         : TimelineData();
 
     _emptyTimeline.value = false;
@@ -419,17 +413,13 @@ class TimelineController
     return _exportController.downloadFile(encodedData);
   }
 
-  void updateSearchMatches() {
-    updateMatches(matchesForSearch(search));
-  }
-
+  @override
   List<TimelineEvent> matchesForSearch(String search) {
-    if (search == null || search.isEmpty) return [];
+    if (search?.isEmpty ?? true) return [];
     final matches = <TimelineEvent>[];
-    final caseInsensitiveSearch = search.toLowerCase();
     for (final event in data.timelineEvents) {
       breadthFirstTraversal<TimelineEvent>(event, action: (TimelineEvent e) {
-        if (e.name.toLowerCase().contains(caseInsensitiveSearch)) {
+        if (e.name.caseInsensitiveContains(search)) {
           matches.add(e);
         }
       });
@@ -481,7 +471,6 @@ class TimelineController
     cpuProfilerController.reset();
     data?.clear();
     processor?.reset();
-    longestFramePortionMs = 0;
     _flutterFrames.value = [];
     _selectedTimelineEventNotifier.value = null;
     _selectedFrameNotifier.value = null;

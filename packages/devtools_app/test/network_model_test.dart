@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:convert';
+
 import 'package:devtools_app/src/utils.dart';
 import 'package:test/test.dart';
 
@@ -37,7 +39,8 @@ void main() {
 
     test('contentType returns correct value', () {
       expect(httpGetEvent.contentType, equals('[text/plain; charset=utf-8]'));
-      expect(httpPutEvent.contentType, equals('[text/plain; charset=utf-8]'));
+      expect(httpPutEvent.contentType,
+          equals('[application/json; charset=utf-8]'));
       expect(httpGetEventWithError.contentType, isNull);
       expect(httpInProgressEvent.contentType, isNull);
       expect(httpInvalidEvent.contentType, isNull);
@@ -47,8 +50,8 @@ void main() {
     });
 
     test('type returns correct value', () {
-      expect(httpGetEvent.type, equals('http'));
-      expect(httpPutEvent.type, equals('http'));
+      expect(httpGetEvent.type, equals('conf'));
+      expect(httpPutEvent.type, equals('json'));
       expect(httpGetEventWithError.type, equals('http'));
       expect(httpInvalidEvent.type, equals('http'));
       expect(httpInProgressEvent.type, equals('http'));
@@ -273,7 +276,7 @@ void main() {
       expect(
         collectionEquals(httpPutEvent.responseHeaders, {
           'x-frame-options': ['SAMEORIGIN'],
-          'content-type': ['text/plain; charset=utf-8'],
+          'content-type': ['application/json; charset=utf-8'],
           'x-xss-protection': ['1; mode=block'],
           'set-cookie': ['Cookie-Monster=Me-want-cookie!; HttpOnly'],
           'x-content-type-options': ['nosniff'],
@@ -309,6 +312,16 @@ void main() {
       expect(httpGetEventWithError.hasCookies, isFalse);
       expect(httpInvalidEvent.hasCookies, isFalse);
       expect(httpInProgressEvent.hasCookies, isFalse);
+    });
+
+    test('responseBody returns correct value', () {
+      expect(httpGetEvent.responseBody, isNotNull);
+      expect(httpGetEvent.responseBody,
+          equals(utf8.decode(httpGetResponseBodyData)));
+      expect(httpPutEvent.responseBody, isNull);
+      expect(httpGetEventWithError.responseBody, isNull);
+      expect(httpInProgressEvent.responseBody, isNull);
+      expect(httpInvalidEvent.responseBody, isNull);
     });
   });
 

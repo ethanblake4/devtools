@@ -4,9 +4,12 @@
 
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../analytics/analytics_stub.dart'
+    if (dart.library.html) '../analytics/analytics.dart' as ga;
 import '../auto_dispose_mixin.dart';
 import '../common_widgets.dart';
 import '../console.dart';
@@ -16,14 +19,25 @@ import '../split.dart';
 import '../table.dart';
 import '../table_data.dart';
 import '../theme.dart';
+import '../ui/colors.dart';
+import '../ui/filter.dart';
+import '../ui/search.dart';
 import '../ui/service_extension_widgets.dart';
 import '../utils.dart';
 import 'logging_controller.dart';
 
+final loggingSearchFieldKey = GlobalKey(debugLabel: 'LoggingSearchFieldKey');
+
 /// Presents logs from the connected app.
 class LoggingScreen extends Screen {
   const LoggingScreen()
-      : super('logging', title: 'Logging', icon: Octicons.clippy);
+      : super(
+          id,
+          title: 'Logging',
+          icon: Octicons.clippy,
+        );
+
+  static const id = 'logging';
 
   @override
   String get docPageId => screenId;
@@ -49,23 +63,35 @@ class LoggingScreen extends Screen {
 class LoggingScreenBody extends StatefulWidget {
   const LoggingScreenBody();
 
+  static const filterQueryInstructions = '''
+Type a filter query to show or hide specific logs.
+
+Any text that is not paired with an available filter key below will be queried against all categories (kind, message).
+
+Available filters:
+    'kind', 'k'       (e.g. 'k:flutter.frame', '-k:gc,stdout')
+
+Example queries:
+    'my log message k:stdout,stdin'
+    'flutter -k:gc'
+''';
+
   @override
   _LoggingScreenState createState() => _LoggingScreenState();
 }
 
 class _LoggingScreenState extends State<LoggingScreenBody>
-    with AutoDisposeMixin {
+    with AutoDisposeMixin, SearchFieldMixin {
   LogData selected;
 
-  TextEditingController filterController;
-
   LoggingController controller;
+
+  List<LogData> filteredLogs;
 
   @override
   void initState() {
     super.initState();
-
-    filterController = TextEditingController();
+    ga.screen(LoggingScreen.id);
   }
 
   @override
@@ -78,19 +104,17 @@ class _LoggingScreenState extends State<LoggingScreenBody>
 
     cancel();
 
-    filterController.text = controller.filterText;
-    filterController.addListener(() {
-      controller.filterText = filterController.text;
+    filteredLogs = controller.filteredData.value;
+    addAutoDisposeListener(controller.filteredData, () {
+      setState(() {
+        filteredLogs = controller.filteredData.value;
+      });
     });
 
-    addAutoDisposeListener(controller.onLogsUpdated, () {
+    selected = controller.selectedLog.value;
+    addAutoDisposeListener(controller.selectedLog, () {
       setState(() {
-        if (selected != null) {
-          final List<LogData> items = controller.filteredData;
-          if (!items.contains(selected)) {
-            selected = null;
-          }
-        }
+        selected = controller.selectedLog.value;
       });
     });
   }
@@ -98,64 +122,94 @@ class _LoggingScreenState extends State<LoggingScreenBody>
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      Row(
-        children: [
-          clearButton(onPressed: _clearLogs),
-          const Spacer(),
-          Container(
-            width: defaultSearchTextWidth,
-            height: defaultSearchTextHeight,
-            child: TextField(
-              controller: filterController,
-              decoration: const InputDecoration(
-                isDense: true,
-                border: OutlineInputBorder(),
-                labelText: 'Filter',
-                // TODO(devoncarew): Include hint text (this currently has an
-                // issue w/ sizing of the search field's contents).
-                //hintText: 'term -term',
-              ),
-            ),
-          ),
-          const SizedBox(width: 8.0),
-          StructuredErrorsToggle(),
-        ],
-      ),
+      _buildLoggingControls(),
+      const SizedBox(height: denseRowSpacing),
       Expanded(
-        child: Split(
-          axis: Axis.vertical,
-          initialFractions: const [0.72, 0.28],
-          children: [
-            OutlineDecoration(
-              child: LogsTable(
-                data: controller.filteredData,
-                onItemSelected: _select,
-              ),
-            ),
-            LogDetails(log: selected),
-          ],
-        ),
+        child: _buildLoggingBody(),
       ),
     ]);
   }
 
-  void _select(LogData log) {
-    setState(() => selected = log);
+  Widget _buildLoggingControls() {
+    final hasData = controller.filteredData.value.isNotEmpty;
+    return Row(
+      children: [
+        ClearButton(onPressed: controller.clear),
+        const Spacer(),
+        StructuredErrorsToggle(),
+        const SizedBox(width: denseSpacing),
+        // TODO(kenz): fix focus issue when state is refreshed
+        Container(
+          width: wideSearchTextWidth,
+          height: defaultTextFieldHeight,
+          child: buildSearchField(
+            controller: controller,
+            searchFieldKey: loggingSearchFieldKey,
+            searchFieldEnabled: hasData,
+            shouldRequestFocus: false,
+            supportsNavigation: true,
+          ),
+        ),
+        const SizedBox(width: denseSpacing),
+        FilterButton(
+          onPressed: _showFilterDialog,
+          isFilterActive: filteredLogs.length != controller.data.length,
+        ),
+      ],
+    );
   }
 
-  void _clearLogs() {
-    setState(() {
-      controller.clear();
-      selected = null;
-    });
+  Widget _buildLoggingBody() {
+    return Split(
+      axis: Axis.vertical,
+      initialFractions: const [0.72, 0.28],
+      children: [
+        OutlineDecoration(
+          child: LogsTable(
+            data: controller.filteredData.value,
+            onItemSelected: controller.selectLog,
+            selectionNotifier: controller.selectedLog,
+            searchMatchesNotifier: controller.searchMatches,
+            activeSearchMatchNotifier: controller.activeSearchMatch,
+          ),
+        ),
+        LogDetails(log: selected),
+      ],
+    );
+  }
+
+  void _showFilterDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => FilterDialog(
+        controller: controller,
+        onApplyFilter: (query) => controller.filterData(
+          QueryFilter.parse(
+            query,
+            controller.filterArgs,
+          ),
+        ),
+        queryInstructions: LoggingScreenBody.filterQueryInstructions,
+      ),
+    );
   }
 }
 
 class LogsTable extends StatelessWidget {
-  LogsTable({Key key, this.data, this.onItemSelected}) : super(key: key);
+  LogsTable({
+    Key key,
+    @required this.data,
+    @required this.onItemSelected,
+    @required this.selectionNotifier,
+    @required this.searchMatchesNotifier,
+    @required this.activeSearchMatchNotifier,
+  }) : super(key: key);
 
   final List<LogData> data;
   final ItemCallback<LogData> onItemSelected;
+  final ValueListenable<LogData> selectionNotifier;
+  final ValueListenable<List<LogData>> searchMatchesNotifier;
+  final ValueListenable<LogData> activeSearchMatchNotifier;
 
   final ColumnData<LogData> when = _WhenColumn();
   final ColumnData<LogData> kind = _KindColumn();
@@ -171,8 +225,11 @@ class LogsTable extends StatelessWidget {
       autoScrollContent: true,
       keyFactory: (LogData data) => ValueKey<LogData>(data),
       onItemSelected: onItemSelected,
+      selectionNotifier: selectionNotifier,
       sortColumn: when,
       sortDirection: SortDirection.ascending,
+      searchMatchesNotifier: searchMatchesNotifier,
+      activeSearchMatchNotifier: activeSearchMatchNotifier,
     );
   }
 }
@@ -213,10 +270,7 @@ class _LogDetailsState extends State<LogDetails>
     }
   }
 
-  bool showInspector(LogData log) => log != null && log.node != null;
-
-  bool showSimple(LogData log) =>
-      log != null && log.node == null && !log.needsComputing;
+  bool showSimple(LogData log) => log != null && !log.needsComputing;
 
   @override
   Widget build(BuildContext context) {
@@ -226,21 +280,15 @@ class _LogDetailsState extends State<LogDetails>
   }
 
   Widget _buildContent(BuildContext context, LogData log) {
-    if (showInspector(log)) {
-      return _buildInspector(context, log);
-    } else {
-      return Stack(
-        children: [
-          _buildSimpleLog(context, log),
-          if (log != null && log.needsComputing)
-            const Center(child: CircularProgressIndicator()),
-        ],
-      );
-    }
+    // TODO(#1370): Handle showing flutter errors in a structured manner.
+    return Stack(
+      children: [
+        _buildSimpleLog(context, log),
+        if (log != null && log.needsComputing)
+          const CenteredCircularProgressIndicator(),
+      ],
+    );
   }
-
-  // TODO(#1370): implement this.
-  Widget _buildInspector(BuildContext context, LogData log) => const SizedBox();
 
   Widget _buildSimpleLog(BuildContext context, LogData log) {
     final disabled = log?.details == null || log.details.isEmpty;
@@ -258,20 +306,21 @@ class _LogDetailsState extends State<LogDetails>
             ),
           ],
         ),
-        lines: log?.prettyPrinted?.split('\n'),
+        lines: log?.prettyPrinted?.split('\n') ?? [],
       ),
     );
   }
 }
 
 class _WhenColumn extends ColumnData<LogData> {
-  _WhenColumn() : super('When');
+  _WhenColumn()
+      : super(
+          'When',
+          fixedWidthPx: 120,
+        );
 
   @override
   bool get supportsSorting => false;
-
-  @override
-  double get fixedWidthPx => 120;
 
   @override
   String getValue(LogData dataObject) => dataObject.timestamp == null
@@ -282,19 +331,24 @@ class _WhenColumn extends ColumnData<LogData> {
 
 class _KindColumn extends ColumnData<LogData>
     implements ColumnRenderer<LogData> {
-  _KindColumn() : super('Kind');
+  _KindColumn()
+      : super(
+          'Kind',
+          fixedWidthPx: 155,
+        );
 
   @override
   bool get supportsSorting => false;
 
   @override
-  double get fixedWidthPx => 145;
-
-  @override
   String getValue(LogData dataObject) => dataObject.kind;
 
   @override
-  Widget build(BuildContext context, LogData item) {
+  Widget build(
+    BuildContext context,
+    LogData item, {
+    bool isRowSelected = false,
+  }) {
     final String kind = item.kind;
 
     Color color = const Color.fromARGB(0xff, 0x61, 0x61, 0x61);
@@ -342,13 +396,22 @@ class _MessageColumn extends ColumnData<LogData>
       dataObject.summary ?? dataObject.details;
 
   @override
-  Widget build(BuildContext context, LogData data) {
+  Widget build(
+    BuildContext context,
+    LogData data, {
+    bool isRowSelected = false,
+  }) {
+    TextStyle textStyle = fixedFontStyle(context);
+    if (isRowSelected) {
+      textStyle = textStyle.copyWith(color: defaultSelectionForegroundColor);
+    }
+
     if (data.kind == 'flutter.frame') {
       const Color color = Color.fromARGB(0xff, 0x00, 0x91, 0xea);
       final Text text = Text(
         getDisplayValue(data),
         overflow: TextOverflow.ellipsis,
-        style: fixedFontStyle(context),
+        style: textStyle,
       );
 
       double frameLength = 0.0;
@@ -378,7 +441,7 @@ class _MessageColumn extends ColumnData<LogData>
             // TODO(helin24): Recompute summary length considering ansi codes.
             //  The current summary is generally the first 200 chars of details.
             getDisplayValue(data),
-            fixedFontStyle(context),
+            textStyle,
           ),
         ),
         overflow: TextOverflow.ellipsis,

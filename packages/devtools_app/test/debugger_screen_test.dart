@@ -36,7 +36,7 @@ void main() {
     }
 
     setUp(() async {
-      fakeServiceManager = FakeServiceManager(useFakeService: true);
+      fakeServiceManager = FakeServiceManager();
       when(fakeServiceManager.connectedApp.isProfileBuildNow).thenReturn(false);
       setGlobal(ServiceConnectionManager, fakeServiceManager);
 
@@ -59,6 +59,8 @@ void main() {
           .thenReturn(ValueNotifier([]));
       when(debuggerController.selectedStackFrame)
           .thenReturn(ValueNotifier(null));
+      when(debuggerController.hasTruncatedFrames)
+          .thenReturn(ValueNotifier(false));
       when(debuggerController.stdio).thenReturn(ValueNotifier(['']));
       when(debuggerController.scriptLocation).thenReturn(ValueNotifier(null));
       when(debuggerController.exceptionPauseMode)
@@ -205,7 +207,7 @@ void main() {
 
     testWidgets('Libraries visible', (WidgetTester tester) async {
       final scripts = [
-        ScriptRef(uri: 'package:/test/script.dart', id: 'test-script')
+        ScriptRef(uri: 'package:test/script.dart', id: 'test-script')
       ];
 
       when(debuggerController.sortedScripts).thenReturn(ValueNotifier(scripts));
@@ -226,7 +228,7 @@ void main() {
           id: 'bp1',
           resolved: false,
           location: UnresolvedSourceLocation(
-            scriptUri: 'package:/test/script.dart',
+            scriptUri: 'package:test/script.dart',
             line: 10,
           ),
         )
@@ -271,7 +273,7 @@ void main() {
               name: 'testCodeRef', id: 'testCodeRef', kind: CodeKind.kDart),
           location: SourceLocation(
             script:
-                ScriptRef(uri: 'package:/test/script.dart', id: 'script.dart'),
+                ScriptRef(uri: 'package:test/script.dart', id: 'script.dart'),
             tokenPos: 10,
           ),
           kind: FrameKind.kRegular,
@@ -279,8 +281,8 @@ void main() {
         Frame(
           index: 1,
           location: SourceLocation(
-            script: ScriptRef(
-                uri: 'package:/test/script1.dart', id: 'script1.dart'),
+            script:
+                ScriptRef(uri: 'package:test/script1.dart', id: 'script1.dart'),
             tokenPos: 10,
           ),
           kind: FrameKind.kRegular,
@@ -293,8 +295,8 @@ void main() {
             kind: CodeKind.kDart,
           ),
           location: SourceLocation(
-            script: ScriptRef(
-                uri: 'package:/test/script2.dart', id: 'script2.dart'),
+            script:
+                ScriptRef(uri: 'package:test/script2.dart', id: 'script2.dart'),
             tokenPos: 10,
           ),
           kind: FrameKind.kRegular,
@@ -307,8 +309,8 @@ void main() {
             kind: CodeKind.kDart,
           ),
           location: SourceLocation(
-            script: ScriptRef(
-                uri: 'package:/test/script3.dart', id: 'script3.dart'),
+            script:
+                ScriptRef(uri: 'package:test/script3.dart', id: 'script3.dart'),
             tokenPos: 10,
           ),
           kind: FrameKind.kRegular,
@@ -316,8 +318,8 @@ void main() {
         Frame(
           index: 4,
           location: SourceLocation(
-            script: ScriptRef(
-                uri: 'package:/test/script4.dart', id: 'script4.dart'),
+            script:
+                ScriptRef(uri: 'package:test/script4.dart', id: 'script4.dart'),
             tokenPos: 10,
           ),
           kind: FrameKind.kAsyncSuspensionMarker,
@@ -349,6 +351,13 @@ void main() {
             widget.text.toPlainText().contains('testCodeRef() script.dart 0')),
         findsOneWidget,
       );
+
+      // verify that the frame has a tooltip
+      expect(
+        find.byTooltip('testCodeRef() script.dart 0'),
+        findsOneWidget,
+      );
+
       // Stack frame 1
       expect(
         find.byWidgetPredicate((Widget widget) =>
@@ -377,7 +386,22 @@ void main() {
       // Stack frame 4
       expect(find.text('<async break>'), findsOneWidget);
     });
+    testWidgetsWithWindowSize('Call Stack displays "SHOW ALL" when truncated',
+        const Size(1000.0, 4000.0), (WidgetTester tester) async {
+      when(debuggerController.hasTruncatedFrames)
+          .thenReturn(ValueNotifier(true));
+      await pumpDebuggerScreen(tester, debuggerController);
+      expect(find.text('SHOW ALL'), findsOneWidget);
+    });
 
+    testWidgetsWithWindowSize(
+        'Call Stack does not display "SHOW ALL" when not truncated',
+        const Size(1000.0, 4000.0), (WidgetTester tester) async {
+      when(debuggerController.hasTruncatedFrames)
+          .thenReturn(ValueNotifier(false));
+      await pumpDebuggerScreen(tester, debuggerController);
+      expect(find.text('SHOW ALL'), findsNothing);
+    });
     testWidgetsWithWindowSize(
         'Variables shows items', const Size(1000.0, 4000.0),
         (WidgetTester tester) async {
@@ -395,6 +419,12 @@ void main() {
           widget is RichText && widget.text.toPlainText().contains('0: 3'));
       final listChild2Finder = find.byWidgetPredicate((Widget widget) =>
           widget is RichText && widget.text.toPlainText().contains('1: 4'));
+
+      // expect a tooltip for the list value
+      expect(
+        find.byTooltip('_GrowableList (2 items)'),
+        findsOneWidget,
+      );
 
       final mapFinder = find.byWidgetPredicate((Widget widget) =>
           widget is RichText &&

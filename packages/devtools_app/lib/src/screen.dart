@@ -4,9 +4,11 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'globals.dart';
+import 'listenable.dart';
 import 'scaffold.dart';
 import 'theme.dart';
 
@@ -21,6 +23,7 @@ abstract class Screen {
     this.requiresLibrary,
     this.requiresDartVm = false,
     this.requiresDebugBuild = false,
+    this.requiresVmDeveloperMode = false,
     this.worksOffline = false,
   });
 
@@ -29,6 +32,7 @@ abstract class Screen {
     String requiresLibrary,
     bool requiresDartVm = false,
     bool requiresDebugBuild = false,
+    bool requiresVmDeveloperMode = false,
     bool worksOffline = false,
     String title,
     IconData icon,
@@ -38,6 +42,7 @@ abstract class Screen {
           requiresLibrary: requiresLibrary,
           requiresDartVm: requiresDartVm,
           requiresDebugBuild: requiresDebugBuild,
+          requiresVmDeveloperMode: requiresVmDeveloperMode,
           worksOffline: worksOffline,
           title: title,
           icon: icon,
@@ -71,6 +76,9 @@ abstract class Screen {
   /// Whether this screen should only be included when the app is debuggable.
   final bool requiresDebugBuild;
 
+  /// Whether this screen should only be included when VM developer mode is enabled.
+  final bool requiresVmDeveloperMode;
+
   /// Whether this screen works offline and should show in offline mode even if conditions are not met.
   final bool worksOffline;
 
@@ -79,7 +87,8 @@ abstract class Screen {
   ///
   /// Some screens act on all isolates; for these screens, displaying a
   /// selector doesn't make sense.
-  bool get showIsolateSelector => false;
+  ValueListenable<bool> get showIsolateSelector =>
+      const FixedValueListenable<bool>(false);
 
   /// The id to use to synthesize a help URL.
   ///
@@ -158,6 +167,11 @@ bool shouldShowScreen(Screen screen) {
   if (screen.requiresDebugBuild) {
     if (!serviceManager.isServiceAvailable ||
         serviceManager.connectedApp.isProfileBuildNow) {
+      return false;
+    }
+  }
+  if (screen.requiresVmDeveloperMode) {
+    if (!preferences.vmDeveloperModeEnabled.value) {
       return false;
     }
   }

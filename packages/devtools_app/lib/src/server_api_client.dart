@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'config_specific/logger/logger.dart';
 import 'config_specific/notifications/notifications.dart';
 import 'config_specific/sse/sse_shim.dart';
+import 'framework_controller.dart';
 import 'globals.dart';
 
 /// This class coordinates the connection between the DevTools server and the
@@ -35,7 +36,11 @@ class DevToolsServerConnection {
     try {
       // ignore: unused_local_variable
       final response = await http.get(uri).timeout(const Duration(seconds: 1));
-      if (response.statusCode != 200) {
+      // When running with the local dev server Flutter may serve its index page
+      // for missing files to support the hashless url strategy. Check the response
+      // content to confirm it came from our server.
+      // See https://github.com/flutter/flutter/issues/67053
+      if (response.statusCode != 200 || response.body != 'OK') {
         // unable to locate dev server
         log('devtools server not available (${response.statusCode})');
         return null;
@@ -68,8 +73,8 @@ class DevToolsServerConnection {
       _notifyConnected(vmServiceUri);
     });
 
-    frameworkController.onPageChange.listen((pageId) {
-      _notifyCurrentPage(pageId);
+    frameworkController.onPageChange.listen((page) {
+      _notifyCurrentPage(page);
     });
 
     frameworkController.onDisconnected.listen((_) {
@@ -158,8 +163,14 @@ class DevToolsServerConnection {
     _callMethod('connected', {'uri': vmServiceUri.toString()});
   }
 
-  void _notifyCurrentPage(String pageId) {
-    _callMethod('currentPage', {'id': pageId});
+  void _notifyCurrentPage(PageChangeEvent page) {
+    _callMethod(
+      'currentPage',
+      {
+        'id': page.id,
+        if (page.embedded != null) 'embedded': page.embedded,
+      },
+    );
   }
 
   void _notifyDisconnected() {

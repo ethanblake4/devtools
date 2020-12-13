@@ -1,7 +1,12 @@
 // Copyright 2019 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+import 'package:mime/mime.dart';
+
+import '../config_specific/logger/logger.dart';
 import '../network/network_model.dart';
 import '../trace_event.dart';
 import '../utils.dart';
@@ -31,6 +36,7 @@ class HttpRequestData extends NetworkRequest {
     int timelineMicrosBase,
     this._startEvent,
     this._endEvent,
+    this.responseBody,
   ) : super(timelineMicrosBase);
 
   /// Build an instance from timeline events.
@@ -38,34 +44,52 @@ class HttpRequestData extends NetworkRequest {
   /// `timelineMicrosBase` is the offset used to determine the wall-time of a
   /// timeline event. `events` is a list of Chrome trace format timeline
   /// events.
-  factory HttpRequestData.fromTimeline(
-    int timelineMicrosBase,
-    List<Map<String, dynamic>> events,
-  ) {
-    TraceEvent startEvent;
-    TraceEvent endEvent;
-    final instantEvents = <TraceEvent>[];
+  factory HttpRequestData.fromTimeline({
+    @required int timelineMicrosBase,
+    @required List<Map<String, dynamic>> requestEvents,
+    @required List<Map<String, dynamic>> responseEvents,
+  }) {
+    TraceEvent requestStartEvent;
+    TraceEvent requestEndEvent;
+    String responseBody;
+    final requestInstantEvents = <TraceEvent>[];
 
-    for (final event in events) {
+    for (final event in requestEvents) {
       final traceEvent = TraceEvent(event);
       if (traceEvent.phase == TraceEvent.asyncBeginPhase) {
-        assert(startEvent == null);
-        startEvent = traceEvent;
+        assert(requestStartEvent == null);
+        requestStartEvent = traceEvent;
       } else if (traceEvent.phase == TraceEvent.asyncEndPhase) {
-        assert(endEvent == null);
-        endEvent = traceEvent;
+        assert(requestEndEvent == null);
+        requestEndEvent = traceEvent;
       } else if (traceEvent.phase == TraceEvent.asyncInstantPhase) {
-        instantEvents.add(traceEvent);
+        requestInstantEvents.add(traceEvent);
       } else {
         assert(false, 'Unexpected event type: ${traceEvent.phase}');
       }
     }
+
+    for (final event in responseEvents) {
+      final traceEvent = TraceEvent(event);
+      // TODO(kenz): do we need to do something with the other response events
+      // (phases 'b' and 'e')?
+      if (traceEvent.phase == TraceEvent.asyncInstantPhase &&
+          traceEvent.name == 'Response body') {
+        final encodedData = (traceEvent.args['data'] as List).cast<int>();
+        responseBody = utf8.decode(encodedData);
+        break;
+      }
+    }
+
     final data = HttpRequestData._(
       timelineMicrosBase,
-      startEvent,
-      endEvent,
+      requestStartEvent,
+      requestEndEvent,
+      responseBody,
     );
-    data._addInstantEvents(instantEvents.map((e) => HttpInstantEvent._(e)));
+    data._addInstantEvents(
+        requestInstantEvents.map((e) => HttpInstantEvent._(e)));
+
     return data;
   }
 
@@ -86,6 +110,7 @@ class HttpRequestData extends NetworkRequest {
 
   final TraceEvent _startEvent;
   TraceEvent _endEvent;
+  final String responseBody;
 
   // Do not add to this list directly! Call `_addInstantEvents` which is
   // responsible for calculating the time offsets of each event.
@@ -111,9 +136,20 @@ class HttpRequestData extends NetworkRequest {
 
   @override
   String get type {
-    // TODO(kenz): pull in a package or implement functionality to pretty print
-    // the MIME type from the 'content-type' field in a response header.
-    return 'http';
+    var mime = contentType;
+    if (mime == null) return 'http';
+
+    // Extract the MIME from `contentType`.
+    // Example: "[text/html; charset-UTF-8]" --> "text/html"
+    mime = mime.split(';').first;
+    if (mime.startsWith('[')) {
+      mime = mime.substring(1);
+    }
+    // TODO(kenz): consider special casing some extensions. For example,
+    // "text/html" is the MIME for both .html and .htm, but since .htm comes
+    // first alphabetically, `extensionFromMime` returns "htm". Other cases are
+    // more unintuitive such as "text/plain" returning "conf".
+    return extensionFromMime(mime);
   }
 
   /// Whether the request is safe to display in the UI.
@@ -124,7 +160,11 @@ class HttpRequestData extends NetworkRequest {
   /// around the issue by displaying them as "in-progress". It would be
   /// reasonable to display them as "unknown start time" but that seems like
   /// more complexity than it is worth.
-  bool get isValid => _startEvent != null;
+  // TODO(kenz): https://github.com/flutter/devtools/issues/2335 - figure out
+  // how to handle HTTP body events in the network profiler. For now, mark them
+  // as invalid.
+  bool get isValid =>
+      _startEvent != null && !_startEvent.name.contains('HTTP CLIENT response');
 
   /// True if either the request or response contained cookies.
   bool get hasCookies =>
@@ -151,6 +191,27 @@ class HttpRequestData extends NetworkRequest {
     if (general == null) return null;
     final Map<String, dynamic> connectionInfo = general[_connectionInfoKey];
     return connectionInfo != null ? connectionInfo[_localPortKey] : null;
+  }
+
+  @override
+  bool get didFail {
+    if (status == null) return false;
+    if (status == 'Error') return true;
+
+    try {
+      final code = int.parse(status);
+      // Status codes 400-499 are client errors and 500-599 are server errors.
+      if (code >= 400) {
+        return true;
+      }
+    } on Exception catch (_) {
+      log(
+        'Could not parse HTTP request status: $status',
+        LogLevel.error,
+      );
+      return true;
+    }
+    return false;
   }
 
   /// True if the HTTP request hasn't completed yet, determined by the lack of
@@ -239,7 +300,7 @@ class HttpRequestData extends NetworkRequest {
       // status code to associate with the request.
       statusCode = 'Error';
     } else {
-      statusCode = endArgs[_statusCodeKey].toString();
+      statusCode = endArgs[_statusCodeKey]?.toString();
     }
     return statusCode;
   }

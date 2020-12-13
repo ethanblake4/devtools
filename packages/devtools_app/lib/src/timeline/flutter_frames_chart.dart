@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -16,15 +18,12 @@ import 'timeline_model.dart';
 class FlutterFramesChart extends StatefulWidget {
   const FlutterFramesChart(
     this.frames,
-    this.longestFrameDurationMs,
     this.displayRefreshRate,
   );
 
   static const chartLegendKey = Key('Flutter frames chart legend');
 
   final List<TimelineFrame> frames;
-
-  final int longestFrameDurationMs;
 
   final double displayRefreshRate;
 
@@ -34,9 +33,6 @@ class FlutterFramesChart extends StatefulWidget {
 
 class _FlutterFramesChartState extends State<FlutterFramesChart>
     with AutoDisposeMixin {
-  static const maxMsForDisplay = 48.0;
-  static const minMsForDisplay = 18.0;
-
   static const defaultFrameWidthWithPadding =
       FlutterFramesChartItem.defaultFrameWidth + densePadding * 2;
 
@@ -56,9 +52,13 @@ class _FlutterFramesChartState extends State<FlutterFramesChart>
 
   double get availableChartHeight => defaultChartHeight - defaultSpacing;
 
+  /// Milliseconds per pixel value for the y-axis.
+  ///
+  /// This value will result in a y-axis time range spanning two times the
+  /// target frame time for a single frame (e.g. 16.6 * 2 for a 60 FPS device).
   double get msPerPx =>
-      widget.longestFrameDurationMs.clamp(minMsForDisplay, maxMsForDisplay) /
-      availableChartHeight;
+      // Multiply by two to reach two times the target frame time.
+      1 / widget.displayRefreshRate * 1000 * 2 / availableChartHeight;
 
   @override
   void initState() {
@@ -111,7 +111,14 @@ class _FlutterFramesChartState extends State<FlutterFramesChart>
         children: [
           Expanded(child: _buildChart()),
           const SizedBox(width: defaultSpacing),
-          _buildChartLegend(),
+          Column(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _buildChartLegend(),
+              if (widget.frames.isNotEmpty) _buildAverageFps(),
+            ],
+          ),
         ],
       ),
     );
@@ -161,13 +168,15 @@ class _FlutterFramesChartState extends State<FlutterFramesChart>
   }
 
   Widget _buildFrame(TimelineFrame frame) {
-    return FlutterFramesChartItem(
-      frame: frame,
-      selected: frame == _selectedFrame,
-      onSelected: () => _controller.selectFrame(frame),
-      msPerPx: msPerPx,
-      availableChartHeight: availableChartHeight - 2 * outlineBorderWidth,
-      displayRefreshRate: widget.displayRefreshRate,
+    return InkWell(
+      onTap: () => _controller.selectFrame(frame),
+      child: FlutterFramesChartItem(
+        frame: frame,
+        selected: frame == _selectedFrame,
+        msPerPx: msPerPx,
+        availableChartHeight: availableChartHeight - 2 * outlineBorderWidth,
+        displayRefreshRate: widget.displayRefreshRate,
+      ),
     );
   }
 
@@ -198,13 +207,30 @@ class _FlutterFramesChartState extends State<FlutterFramesChart>
       ],
     );
   }
+
+  Widget _buildAverageFps() {
+    final double sumFrameTimesMs = widget.frames.fold(
+      0.0,
+      (sum, frame) =>
+          sum +
+          math.max(
+            1000 / widget.displayRefreshRate,
+            math.max(frame.uiDurationMs, frame.rasterDurationMs),
+          ),
+    );
+    final avgFrameTime = sumFrameTimesMs / widget.frames.length;
+    final avgFps = (1 / avgFrameTime * 1000).round();
+    return Text(
+      '$avgFps FPS (average)',
+      maxLines: 2,
+    );
+  }
 }
 
 class FlutterFramesChartItem extends StatelessWidget {
   const FlutterFramesChartItem({
     @required this.frame,
     @required this.selected,
-    @required this.onSelected,
     @required this.msPerPx,
     @required this.availableChartHeight,
     @required this.displayRefreshRate,
@@ -220,8 +246,6 @@ class FlutterFramesChartItem extends StatelessWidget {
   final TimelineFrame frame;
 
   final bool selected;
-
-  final VoidCallback onSelected;
 
   final double msPerPx;
 
@@ -258,21 +282,17 @@ class FlutterFramesChartItem extends StatelessWidget {
             children: [
               // Dummy child so that the InkWell does not take up the entire column.
               const Expanded(child: SizedBox()),
-              InkWell(
-                // TODO(kenz): make tooltip to persist if the frame is selected.
-                // TODO(kenz): change color on hover.
-                onTap: onSelected,
-                child: Tooltip(
-                  message: _tooltipText(frame),
-                  padding: const EdgeInsets.all(denseSpacing),
-                  preferBelow: false,
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      ui,
-                      raster,
-                    ],
-                  ),
+              // TODO(kenz): make tooltip to persist if the frame is selected.
+              Tooltip(
+                message: _tooltipText(frame),
+                padding: const EdgeInsets.all(denseSpacing),
+                preferBelow: false,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    ui,
+                    raster,
+                  ],
                 ),
               ),
             ],
@@ -281,7 +301,7 @@ class FlutterFramesChartItem extends StatelessWidget {
         if (selected)
           Container(
             key: selectedFrameIndicatorKey,
-            color: timelineSelectionColor,
+            color: defaultSelectionColor,
             height: selectedIndicatorHeight,
           ),
       ],
@@ -453,7 +473,7 @@ class FPSLinePainter extends CustomPainter {
     );
 
     // Max FPS non-jank value in ms. E.g., 16.6 for 60 FPS, 8.3 for 120 FPS.
-    final targetMsPerFrame = 1 / displayRefreshRate * 1000;
+    final targetMsPerFrame = 1000 / displayRefreshRate;
     final targetLineY = constraints.maxHeight - targetMsPerFrame / msPerPx;
 
     canvas.drawLine(

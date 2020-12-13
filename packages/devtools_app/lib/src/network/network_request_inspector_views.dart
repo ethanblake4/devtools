@@ -136,6 +136,22 @@ class HttpRequestHeadersView extends StatelessWidget {
   }
 }
 
+class HttpResponseView extends StatelessWidget {
+  const HttpResponseView(this.data);
+
+  final HttpRequestData data;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      child: Text(
+        data.responseBody,
+        style: fixedFontStyle(context),
+      ),
+    );
+  }
+}
+
 /// A [Widget] which displays [Cookie] information in a tab.
 class HttpRequestCookiesView extends StatelessWidget {
   const HttpRequestCookiesView(this.data);
@@ -256,7 +272,7 @@ class HttpRequestCookiesView extends StatelessWidget {
     final responseCookies = data.responseCookies;
     return LayoutBuilder(
       builder: (context, constraints) {
-        return Column(
+        return ListView(
           children: [
             if (responseCookies.isNotEmpty)
               _buildCookiesTable(
@@ -302,18 +318,16 @@ class NetworkRequestOverviewView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
+    return ListView(
       padding: const EdgeInsets.all(defaultSpacing),
-      child: Column(
-        children: [
-          ..._buildGeneralRows(context),
-          if (data is WebSocket) ..._buildSocketOverviewRows(context),
-          const PaddedDivider(
-            padding: EdgeInsets.only(bottom: denseRowSpacing),
-          ),
-          ..._buildTimingOverview(context),
-        ],
-      ),
+      children: [
+        ..._buildGeneralRows(context),
+        if (data is WebSocket) ..._buildSocketOverviewRows(context),
+        const PaddedDivider(
+          padding: EdgeInsets.only(bottom: denseRowSpacing),
+        ),
+        ..._buildTimingOverview(context),
+      ],
     );
   }
 
@@ -405,7 +419,6 @@ class NetworkRequestOverviewView extends StatelessWidget {
 
     final _colors = [
       searchMatchColor,
-      mainUiColor,
       mainRasterColor,
     ];
     var _colorIndex = 0;

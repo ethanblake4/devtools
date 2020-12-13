@@ -2,8 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
@@ -71,22 +69,27 @@ class _ServiceExtensionButtonGroupState
       // VMServiceManager.
       final extensionName = extension.description.extension;
       // Update the button state to match the latest state on the VM.
-      autoDispose(serviceManager.serviceExtensionManager
-          .getServiceExtensionState(extensionName, (state) {
+      final state = serviceManager.serviceExtensionManager
+          .getServiceExtensionState(extensionName);
+      extension.isSelected = state.value.enabled;
+
+      addAutoDisposeListener(state, () {
         setState(() {
-          extension.isSelected =
-              state.value == extension.description.enabledValue;
+          extension.isSelected = state.value.enabled;
         });
-      }));
+      });
       // Track whether the extension is actually exposed by the VM.
-      autoDispose(serviceManager.serviceExtensionManager.hasServiceExtension(
-        extensionName,
-        (available) {
+      final listenable = serviceManager.serviceExtensionManager
+          .hasServiceExtension(extensionName);
+      extension.isAvailable = listenable.value;
+      addAutoDisposeListener(
+        listenable,
+        () {
           setState(() {
-            extension.isAvailable = available;
+            extension.isAvailable = listenable.value;
           });
         },
-      ));
+      );
     }
   }
 
@@ -328,14 +331,19 @@ class _ServiceExtensionToggleState extends State<_ServiceExtensionToggle>
   @override
   void initState() {
     super.initState();
-    autoDispose(serviceManager.serviceExtensionManager.getServiceExtensionState(
-      widget.service.extension,
-      (data) {
+    final state = serviceManager.serviceExtensionManager
+        .getServiceExtensionState(widget.service.extension);
+
+    value = state.value.enabled;
+
+    addAutoDisposeListener(
+      state,
+      () {
         setState(() {
-          value = data.value == widget.service.enabledValue;
+          value = state.value.enabled;
         });
       },
-    ));
+    );
   }
 
   @override
@@ -423,17 +431,21 @@ mixin _ServiceExtensionMixin<T extends _ServiceExtensionWidget> on State<T> {
     try {
       await action();
 
-      if (widget.completedText != null) {
+      if (mounted && widget.completedText != null) {
         Notifications.of(context).push(widget.completedText);
       }
     } catch (e, st) {
       log('$e\n$st');
 
-      Notifications.of(context).push(widget.describeError(e));
+      if (mounted) {
+        Notifications.of(context).push(widget.describeError(e));
+      }
     } finally {
-      setState(() {
-        disabled = false;
-      });
+      if (mounted) {
+        setState(() {
+          disabled = false;
+        });
+      }
     }
   }
 }

@@ -94,7 +94,7 @@ class ScriptPickerState extends State<ScriptPicker> {
             child: Padding(
               padding: const EdgeInsets.all(denseSpacing),
               child: SizedBox(
-                height: defaultSearchTextHeight,
+                height: defaultTextFieldHeight,
                 child: TextField(
                   decoration: InputDecoration(
                     labelText:
@@ -109,10 +109,7 @@ class ScriptPickerState extends State<ScriptPicker> {
               ),
             ),
           ),
-          if (_isLoading)
-            const Center(
-              child: CircularProgressIndicator(),
-            ),
+          if (_isLoading) const CenteredCircularProgressIndicator(),
           if (!_isLoading)
             Expanded(
               child: TreeView<FileNode>(
@@ -130,7 +127,6 @@ class ScriptPickerState extends State<ScriptPicker> {
       waitDuration: tooltipWait,
       preferBelow: false,
       message: node.name,
-      key: ValueKey(node.name),
       child: Material(
         child: InkWell(
           onTap: () {

@@ -4,20 +4,23 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:devtools_shared/devtools_shared.dart';
 import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import 'package:meta/meta.dart';
+import 'package:path/path.dart' as path;
 import 'package:vm_service/vm_service.dart';
 
 import '../config_specific/logger/logger.dart' as logger;
-import '../core/filtering.dart';
 import '../core/message_bus.dart';
 import '../globals.dart';
 import '../inspector/diagnostics_node.dart';
 import '../inspector/inspector_service.dart';
 import '../inspector/inspector_tree.dart';
+import '../ui/filter.dart';
+import '../ui/search.dart';
 import '../utils.dart';
 import '../vm_service_wrapper.dart';
 
@@ -120,7 +123,6 @@ class LoggingDetailsController {
 
     // See if we need to asynchronously compute the log entry details.
     if (data.needsComputing) {
-      assert(data.node == null);
       onShowDetails(text: '');
 
       data.compute().then((_) {
@@ -136,7 +138,6 @@ class LoggingDetailsController {
   }
 
   void _updateUIFromData() {
-    assert(data.node == null);
     if (data.details.startsWith('{') && data.details.endsWith('}')) {
       try {
         // If the string decodes properly, then format the json.
@@ -151,7 +152,8 @@ class LoggingDetailsController {
   }
 }
 
-class LoggingController {
+class LoggingController
+    with SearchControllerMixin<LogData>, FilterControllerMixin<LogData> {
   LoggingController({this.inspectorService}) {
     _listen(serviceManager.onConnectionAvailable, _handleConnectionStart);
     if (serviceManager.hasConnection) {
@@ -160,6 +162,15 @@ class LoggingController {
     _listen(serviceManager.onConnectionClosed, _handleConnectionStop);
     _handleBusEvents();
   }
+
+  static const kindFilterId = 'logging-kind-filter';
+
+  final _filterArgs = {
+    kindFilterId: FilterArgument(keys: ['kind', 'k']),
+  };
+
+  @override
+  Map<String, FilterArgument> get filterArgs => _filterArgs;
 
   /// Listen on a stream and track the stream subscription for automatic
   /// disposal if the dispose method is called.
@@ -183,45 +194,32 @@ class LoggingController {
 
   List<LogData> data = <LogData>[];
 
-  // If non-null, this is an up-to-date cache of the filtered view of items.
-  List<LogData> _cachedFilteredData;
+  final _selectedLog = ValueNotifier<LogData>(null);
 
-  /// Get the view of the [data] items, filtered by the current value of
-  /// [filterText].
-  List<LogData> get filteredData {
-    if (filterText == null || filterText.trim().isEmpty) {
-      return data;
-    }
-
-    if (_cachedFilteredData != null) {
-      return _cachedFilteredData;
-    }
-
-    // Filter using both positive and negative terms.
-    final filter = Filter.compile(filterText);
-    _cachedFilteredData = data.where((LogData logData) {
-      return filter.matches(logData.matchesFilter);
-    }).toList();
-    return _cachedFilteredData;
-  }
+  ValueListenable<LogData> get selectedLog => _selectedLog;
 
   final List<StreamSubscription> _subscriptions = [];
 
-  final Reporter onLogsUpdated = Reporter();
+  void selectLog(LogData data) {
+    _selectedLog.value = data;
+  }
 
-  String _filterText;
-
-  /// The search term used to filter [data] - the list of items.
-  ///
-  /// See also [filteredData] for the filtered view of [data].
-  String get filterText => _filterText;
-
-  set filterText(String value) {
-    _filterText = value;
-    _cachedFilteredData = null;
-
-    onLogsUpdated.notify();
+  void _updateData(List<LogData> logs) {
+    data = logs;
+    filterData(activeFilter.value);
+    refreshSearchMatches();
+    _updateSelection();
     _updateStatus();
+  }
+
+  void _updateSelection() {
+    final selected = _selectedLog.value;
+    if (selected != null) {
+      final logs = filteredData.value;
+      if (!logs.contains(selected)) {
+        _selectedLog.value = null;
+      }
+    }
   }
 
   /// ObjectGroup for Flutter (null for non-Flutter apps).
@@ -229,7 +227,7 @@ class LoggingController {
 
   String get statusText {
     final int totalCount = data.length;
-    final int showingCount = filteredData.length;
+    final int showingCount = filteredData.value.length;
 
     String label;
 
@@ -251,9 +249,8 @@ class LoggingController {
   }
 
   void clear() {
-    data.clear();
-    _cachedFilteredData = null;
-    _updateStatus();
+    resetFilter();
+    _updateData([]);
   }
 
   void _handleConnectionStart(VmServiceWrapper service) async {
@@ -305,6 +302,7 @@ class LoggingController {
     if (filteredEvents.contains(e.extensionKind)) {
       return;
     }
+
     if (e.extensionKind == FrameInfo.eventName) {
       final FrameInfo frame = FrameInfo.from(e.extensionData.data);
 
@@ -318,6 +316,17 @@ class LoggingController {
         e.timestamp,
         summary: frameInfoText,
       ));
+    } else if (e.extensionKind == ImageSizesForFrame.eventName) {
+      final images = ImageSizesForFrame.from(e.extensionData.data);
+
+      for (final image in images) {
+        log(LogData(
+          e.extensionKind.toLowerCase(),
+          jsonEncode(image.rawJson),
+          e.timestamp,
+          summary: image.summary,
+        ));
+      }
     } else if (e.extensionKind == NavigationInfo.eventName) {
       final NavigationInfo navInfo = NavigationInfo.from(e.extensionData.data);
 
@@ -359,10 +368,9 @@ class LoggingController {
       final RemoteDiagnosticsNode summary = _findFirstSummary(node) ?? node;
       log(LogData(
         e.extensionKind.toLowerCase(),
-        jsonEncode(e.json),
+        jsonEncode(e.extensionData.data),
         e.timestamp,
         summary: summary.toDiagnosticsNode().toString(),
-        node: node,
       ));
     } else {
       log(LogData(
@@ -487,26 +495,25 @@ class LoggingController {
   void _handleConnectionStop(dynamic event) {}
 
   void log(LogData log) {
-    _cachedFilteredData = null;
+    List<LogData> currentLogs = List.from(data);
 
     // Insert the new item and clamped the list to kMaxLogItemsLength.
-    data.add(log);
+    currentLogs.add(log);
 
     // Note: We need to drop rows from the start because we want to drop old
     // rows but because that's expensive, we only do it periodically (eg. when
     // the list is 500 rows more).
-    if (data.length > kMaxLogItemsUpperBound) {
-      int itemsToRemove = data.length - kMaxLogItemsLowerBound;
+    if (currentLogs.length > kMaxLogItemsUpperBound) {
+      int itemsToRemove = currentLogs.length - kMaxLogItemsLowerBound;
       // Ensure we remove an even number of rows to keep the alternating
       // background in-sync.
       if (itemsToRemove % 2 == 1) {
         itemsToRemove--;
       }
-      data = data.sublist(itemsToRemove);
+      currentLogs = currentLogs.sublist(itemsToRemove);
     }
 
-    onLogsUpdated.notify();
-    _updateStatus();
+    _updateData(currentLogs);
   }
 
   static RemoteDiagnosticsNode _findFirstSummary(RemoteDiagnosticsNode node) {
@@ -612,6 +619,58 @@ class LoggingController {
         summary: summary,
       ),
     );
+  }
+
+  @override
+  List<LogData> matchesForSearch(String search) {
+    if (search == null || search.isEmpty) return [];
+    final matches = <LogData>[];
+    final caseInsensitiveSearch = search.toLowerCase();
+
+    final currentLogs = filteredData.value;
+    for (final log in currentLogs) {
+      if ((log.summary != null &&
+              log.summary.toLowerCase().contains(caseInsensitiveSearch)) ||
+          (log.details != null &&
+              log.details.toLowerCase().contains(caseInsensitiveSearch))) {
+        matches.add(log);
+      }
+    }
+    return matches;
+  }
+
+  @override
+  void filterData(QueryFilter filter) {
+    if (filter == null) {
+      filteredData.value = List.from(data);
+    } else {
+      filteredData.value = data.where((log) {
+        final kindArg = filter.filterArguments[kindFilterId];
+        if (kindArg != null && !kindArg.matchesValue(log.kind.toLowerCase())) {
+          return false;
+        }
+
+        if (filter.substrings.isNotEmpty) {
+          for (final substring in filter.substrings) {
+            final caseInsensitiveSubstring = substring.toLowerCase();
+            final matchesKind = log.kind != null &&
+                log.kind.toLowerCase().contains(caseInsensitiveSubstring);
+            if (matchesKind) return true;
+
+            final matchesSummary = log.summary != null &&
+                log.summary.toLowerCase().contains(caseInsensitiveSubstring);
+            if (matchesSummary) return true;
+
+            final matchesDetails = log.details != null &&
+                log.summary.toLowerCase().contains(caseInsensitiveSubstring);
+            if (matchesDetails) return true;
+          }
+          return false;
+        }
+        return true;
+      }).toList();
+    }
+    activeFilter.value = filter;
   }
 }
 
@@ -741,9 +800,12 @@ class LogData {
   }
 
   String get prettyPrinted {
-    if (needsComputing) return details;
+    if (needsComputing) {
+      return details;
+    }
+
     try {
-      return prettyPrinter.convert(jsonDecode(details));
+      return prettyPrinter.convert(jsonDecode(details)).replaceAll(r'\n', '\n');
     } catch (_) {
       return details;
     }
@@ -787,6 +849,69 @@ class FrameInfo {
 
   @override
   String toString() => 'frame $number ${elapsedMs.toStringAsFixed(1)}ms';
+}
+
+class ImageSizesForFrame {
+  ImageSizesForFrame(
+    this.source,
+    this.displaySize,
+    this.imageSize,
+    this.rawJson,
+  );
+
+  static const String eventName = 'Flutter.ImageSizesForFrame';
+
+  static List<ImageSizesForFrame> from(Map<String, dynamic> data) {
+    //     "packages/flutter_gallery_assets/assets/icons/material/2.0x/material.png": {
+    //       "source": "packages/flutter_gallery_assets/assets/icons/material/2.0x/material.png",
+    //       "displaySize": {
+    //         "width": 64.0,
+    //         "height": 63.99999999999999
+    //       },
+    //       "imageSize": {
+    //         "width": 128.0,
+    //         "height": 128.0
+    //       },
+    //       "displaySizeInBytes": 21845,
+    //       "decodedSizeInBytes": 87381
+    //     }
+
+    return data.values.map((entry) {
+      return ImageSizesForFrame(
+        entry['source'],
+        entry['displaySize'],
+        entry['imageSize'],
+        entry,
+      );
+    }).toList();
+  }
+
+  final String source;
+  final Map<String, Object> displaySize;
+  final Map<String, Object> imageSize;
+  final Map<String, Object> rawJson;
+
+  String get summary {
+    final file = path.basename(source);
+
+    final int displaySizeInBytes = rawJson['displaySizeInBytes'];
+    final int decodedSizeInBytes = rawJson['decodedSizeInBytes'];
+
+    final double expansion =
+        math.sqrt(decodedSizeInBytes ?? 0) / math.sqrt(displaySizeInBytes ?? 1);
+
+    return 'Image $file • displayed at '
+        '${_round(displaySize['width'])}x${_round(displaySize['height'])}'
+        ' • created at '
+        '${_round(imageSize['width'])}x${_round(imageSize['height'])}'
+        ' • ${expansion.toStringAsFixed(1)}x';
+  }
+
+  int _round(num value) => value.round();
+
+  @override
+  String toString() =>
+      '$source ${displaySize['width']}x${displaySize['height']}';
 }
 
 class NavigationInfo {

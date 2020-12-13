@@ -321,53 +321,29 @@ class TreeTableData<T extends TreeNode<T>> extends TableData<T> {
     _selectedObject ??= dataObject;
     setRows(data);
   }
-
-  void expandAll() {
-    // Store visited nodes so that we do not expand the same root multiple
-    // times.
-    final visited = <T>{};
-    for (T dataObject in data) {
-      final root = dataObject.root;
-      if (!visited.contains(root)) {
-        root.expandCascading();
-        visited.add(root);
-      }
-    }
-
-    setRows(data);
-  }
-
-  void collapseAll() {
-    // Store visited nodes so that we do not collapse the same root multiple
-    // times.
-    final visited = <T>{};
-    for (T dataObject in data) {
-      final root = dataObject.root;
-      if (!visited.contains(root)) {
-        root.collapseCascading();
-        visited.add(root);
-      }
-    }
-
-    setRows(data);
-  }
 }
 
 // TODO(peterdjlee): Remove get from method names.
 abstract class ColumnData<T> {
   ColumnData(
     this.title, {
+    @required this.fixedWidthPx,
     this.alignment = ColumnAlignment.left,
-    this.fixedWidthPx,
-  });
+  })  : assert(fixedWidthPx != null),
+        minWidthPx = null;
 
-  ColumnData.wide(this.title, {this.alignment = ColumnAlignment.left})
-      : fixedWidthPx = null;
+  ColumnData.wide(
+    this.title, {
+    this.minWidthPx,
+    this.alignment = ColumnAlignment.left,
+  }) : fixedWidthPx = null;
 
   final String title;
 
   /// Width of the column expressed as a fixed number of pixels.
   final double fixedWidthPx;
+
+  final double minWidthPx;
 
   /// How much to indent the data object by.
   ///
@@ -403,7 +379,7 @@ abstract class ColumnData<T> {
 }
 
 abstract class TreeColumnData<T extends TreeNode<T>> extends ColumnData<T> {
-  TreeColumnData(String title) : super(title);
+  TreeColumnData(String title) : super.wide(title);
 
   static const treeToggleWidth = 14.0;
 
@@ -419,13 +395,7 @@ abstract class TreeColumnData<T extends TreeNode<T>> extends ColumnData<T> {
 
   @override
   double getNodeIndentPx(T dataObject) {
-    double indentWidth = dataObject.level * treeToggleWidth;
-    if (!dataObject.isExpandable) {
-      // If the object is not expandable, we need to increase the width of our
-      // spacer to account for the missing tree toggle.
-      indentWidth += TreeColumnData.treeToggleWidth;
-    }
-    return indentWidth;
+    return dataObject.level * treeToggleWidth;
   }
 }
 

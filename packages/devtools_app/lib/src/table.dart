@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide TableRow;
 import 'package:flutter/services.dart';
 
@@ -12,6 +13,8 @@ import 'table_data.dart';
 import 'theme.dart';
 import 'tree.dart';
 import 'trees.dart';
+import 'ui/colors.dart';
+import 'ui/search.dart';
 import 'utils.dart';
 
 // TODO(devoncarew): We need to render the selected row with a different
@@ -51,6 +54,9 @@ class FlatTable<T> extends StatefulWidget {
     @required this.sortColumn,
     @required this.sortDirection,
     this.onSortChanged,
+    this.searchMatchesNotifier,
+    this.activeSearchMatchNotifier,
+    this.selectionNotifier,
   })  : assert(columns != null),
         assert(keyFactory != null),
         assert(data != null),
@@ -74,6 +80,14 @@ class FlatTable<T> extends StatefulWidget {
   final SortDirection sortDirection;
 
   final Function(ColumnData<T> column, SortDirection direction) onSortChanged;
+
+  final ValueListenable<List<T>> searchMatchesNotifier;
+
+  final ValueListenable<T> activeSearchMatchNotifier;
+
+  final ValueListenable<T> selectionNotifier;
+
+  int get numSpacers => max(0, columns.length - 1);
 
   @override
   FlatTableState<T> createState() => FlatTableState<T>();
@@ -105,20 +119,87 @@ class FlatTableState<T> extends State<FlatTable<T>>
     sortData(widget.sortColumn, widget.sortDirection);
   }
 
-  List<double> _computeColumnWidths(double maxWidth) {
+  @visibleForTesting
+  List<double> computeColumnWidths(double maxWidth) {
+    // Subtract width from outer padding around table.
     maxWidth -= 2 * defaultSpacing;
+    maxWidth -= widget.numSpacers * defaultSpacing;
+    maxWidth = max(0, maxWidth);
 
-    final unconstrainedCount =
-        widget.columns.where((col) => col.fixedWidthPx == null).length;
-    final allocatedWidth = widget.columns.fold(0,
-        (val, col) => col.fixedWidthPx == null ? val : col.fixedWidthPx + val);
-    final available = maxWidth - allocatedWidth;
+    double available = maxWidth;
+    // Columns sorted by increasing minWidth.
+    final sortedColumns = widget.columns.toList()
+      ..sort((a, b) {
+        if (a.minWidthPx != null && b.minWidthPx != null) {
+          return a.minWidthPx.compareTo(b.minWidthPx);
+        }
+        if (a.minWidthPx != null) return -1;
+        if (b.minWidthPx != null) return 1;
+        return 0;
+      });
 
+    for (var col in widget.columns) {
+      if (col.fixedWidthPx != null) {
+        available -= col.fixedWidthPx;
+      } else if (col.minWidthPx != null) {
+        available -= col.minWidthPx;
+      }
+    }
+    available = max(available, 0);
+    int unconstrainedCount = 0;
+    for (var column in sortedColumns) {
+      if (column.fixedWidthPx == null && column.minWidthPx == null) {
+        unconstrainedCount++;
+      }
+    }
+
+    if (available > 0) {
+      // We need to find how many columns with minWidth constraints can actually
+      // be treated as unconstrained as their minWidth constraint is satisfied
+      // by the width given to all unconstrained columns.
+      // We use a greedy algorithm to accurately compute this by iterating
+      // through the columns from the smallest minWidth to largest minWidth
+      // incrementally adding columns where the minWidth constraint can be
+      // satisfied using the width given to unconstrained columns.
+      for (var column in sortedColumns) {
+        if (column.fixedWidthPx == null && column.minWidthPx != null) {
+          // Width of this column if it was not clamped to its min width.
+          // We add column.minWidthPx to the available width because
+          // available is currently not considering the space reserved for this
+          // column's min width as available.
+          final widthIfUnconstrainedByMinWidth =
+              (available + column.minWidthPx) / (unconstrainedCount + 1);
+          if (widthIfUnconstrainedByMinWidth < column.minWidthPx) {
+            // We have found the first column that will have to be clamped to
+            // its min width.
+            break;
+          }
+          // As this column's width in the final layout is greater than its
+          // min width, we can treat it as unconstrained and give its min width
+          // back to the available pool.
+          unconstrainedCount++;
+          available += column.minWidthPx;
+        }
+      }
+    }
+    final unconstrainedWidth =
+        unconstrainedCount > 0 ? available / unconstrainedCount : available;
+    int unconstrainedFound = 0;
     final widths = <double>[];
     for (ColumnData<T> column in widget.columns) {
-      final width = column.fixedWidthPx ?? (available / unconstrainedCount);
+      double width = column.fixedWidthPx;
+      if (width == null) {
+        if (column.minWidthPx != null &&
+            column.minWidthPx > unconstrainedWidth) {
+          width = column.minWidthPx;
+        } else {
+          width = unconstrainedWidth;
+          unconstrainedFound++;
+        }
+      }
       widths.add(width);
     }
+    assert(unconstrainedCount == unconstrainedFound);
     return widths;
   }
 
@@ -126,10 +207,10 @@ class FlatTableState<T> extends State<FlatTable<T>>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final columnWidths = _computeColumnWidths(constraints.maxWidth);
+        final columnWidths = computeColumnWidths(constraints.maxWidth);
 
         return _Table<T>(
-          itemCount: data.length,
+          data: data,
           columns: widget.columns,
           columnWidths: columnWidths,
           autoScrollContent: widget.autoScrollContent,
@@ -137,6 +218,7 @@ class FlatTableState<T> extends State<FlatTable<T>>
           sortColumn: widget.sortColumn,
           sortDirection: widget.sortDirection,
           onSortChanged: _sortDataAndUpdate,
+          activeSearchMatchNotifier: widget.activeSearchMatchNotifier,
         );
       },
     );
@@ -157,6 +239,11 @@ class FlatTableState<T> extends State<FlatTable<T>>
       columns: widget.columns,
       columnWidths: columnWidths,
       backgroundColor: alternatingColorForIndexWithContext(index, context),
+      isSelected: widget.selectionNotifier != null
+          ? node == widget.selectionNotifier.value
+          : false,
+      searchMatchesNotifier: widget.searchMatchesNotifier,
+      activeSearchMatchNotifier: widget.activeSearchMatchNotifier,
     );
   }
 
@@ -218,6 +305,7 @@ class TreeTable<T extends TreeNode<T>> extends StatefulWidget {
     @required this.sortColumn,
     @required this.sortDirection,
     this.selectionNotifier,
+    this.autoExpandRoots = false,
   })  : assert(columns.contains(treeColumn)),
         assert(columns.contains(sortColumn)),
         assert(columns != null),
@@ -242,6 +330,8 @@ class TreeTable<T extends TreeNode<T>> extends StatefulWidget {
   final SortDirection sortDirection;
 
   final ValueNotifier<Selection<T>> selectionNotifier;
+
+  final bool autoExpandRoots;
 
   @override
   TreeTableState<T> createState() => TreeTableState<T>();
@@ -311,6 +401,13 @@ class TreeTableState<T extends TreeNode<T>> extends State<TreeTable<T>>
   }
 
   void _initData() {
+    dataRoots = List.generate(widget.dataRoots.length, (index) {
+      final root = widget.dataRoots[index];
+      if (widget.autoExpandRoots) {
+        root.expand();
+      }
+      return root;
+    });
     dataRoots = List.from(widget.dataRoots);
     sortData(widget.sortColumn, widget.sortDirection);
 
@@ -402,6 +499,7 @@ class TreeTableState<T extends TreeNode<T>> extends State<TreeTable<T>>
     final widths = <double>[];
     for (ColumnData<T> column in widget.columns) {
       double width = column.getNodeIndentPx(deepest);
+      assert(width >= 0.0);
       if (column.fixedWidthPx != null) {
         width += column.fixedWidthPx;
       } else {
@@ -422,8 +520,8 @@ class TreeTableState<T extends TreeNode<T>> extends State<TreeTable<T>>
   @override
   Widget build(BuildContext context) {
     return _Table<T>(
+      data: items,
       columns: widget.columns,
-      itemCount: items.length,
       columnWidths: columnWidths,
       rowBuilder: _buildRow,
       sortColumn: widget.sortColumn,
@@ -612,10 +710,12 @@ class TreeTableState<T extends TreeNode<T>> extends State<TreeTable<T>>
   }
 }
 
+// TODO(kenz): https://github.com/flutter/devtools/issues/1522. The table code
+// needs to be refactored to support flexible column widths.
 class _Table<T> extends StatefulWidget {
   const _Table({
     Key key,
-    @required this.itemCount,
+    @required this.data,
     @required this.columns,
     @required this.columnWidths,
     @required this.rowBuilder,
@@ -626,9 +726,10 @@ class _Table<T> extends StatefulWidget {
     this.handleKeyEvent,
     this.autoScrollContent = false,
     this.selectionNotifier,
+    this.activeSearchMatchNotifier,
   }) : super(key: key);
 
-  final int itemCount;
+  final List<T> data;
 
   final bool autoScrollContent;
   final List<ColumnData<T>> columns;
@@ -640,9 +741,12 @@ class _Table<T> extends StatefulWidget {
   final FocusNode focusNode;
   final TableKeyEventHandler handleKeyEvent;
   final ValueNotifier<Selection<T>> selectionNotifier;
+  final ValueListenable<T> activeSearchMatchNotifier;
 
   /// The width to assume for columns that don't specify a width.
-  static const defaultColumnWidth = 500.0;
+  static const defaultColumnWidth = 1000.0;
+
+  int get numSpacers => max(0, columns.length - 1);
 
   @override
   _TableState<T> createState() => _TableState<T>();
@@ -662,6 +766,8 @@ class _TableState<T> extends State<_Table<T>> with AutoDisposeMixin {
     sortColumn = widget.sortColumn;
     sortDirection = widget.sortDirection;
     scrollController = ScrollController();
+
+    _initSearchListener();
   }
 
   @override
@@ -670,6 +776,7 @@ class _TableState<T> extends State<_Table<T>> with AutoDisposeMixin {
 
     cancel();
 
+    // TODO(kenz): pull this code into a helper and also call from initState.
     // Detect selection changes but only care about scrollIntoView.
     addAutoDisposeListener(oldWidget.selectionNotifier, () {
       setState(() {
@@ -685,6 +792,35 @@ class _TableState<T> extends State<_Table<T>> with AutoDisposeMixin {
         }
       });
     });
+
+    _initSearchListener();
+  }
+
+  void _initSearchListener() {
+    if (widget.activeSearchMatchNotifier != null) {
+      addAutoDisposeListener(
+        widget.activeSearchMatchNotifier,
+        _onActiveSearchChange,
+      );
+    }
+  }
+
+  void _onActiveSearchChange() async {
+    final activeSearch = widget.activeSearchMatchNotifier.value;
+    final index = widget.data.indexOf(activeSearch);
+
+    if (index != -1) {
+      final y = index * defaultRowHeight;
+      final indexInView = y > scrollController.offset &&
+          y < scrollController.offset + scrollController.position.extentInside;
+      if (!indexInView) {
+        await scrollController.animateTo(
+          index * defaultRowHeight,
+          duration: defaultDuration,
+          curve: defaultCurve,
+        );
+      }
+    }
   }
 
   /// Return the number of visible rows above the selected node.
@@ -730,13 +866,18 @@ class _TableState<T> extends State<_Table<T>> with AutoDisposeMixin {
   @override
   void dispose() {
     scrollController.dispose();
-
     super.dispose();
   }
 
   /// The width of all columns in the table, with additional padding.
-  double get tableWidth =>
-      widget.columnWidths.reduce((x, y) => x + y) + (2 * defaultSpacing);
+  double get tableWidth {
+    var tableWidth = 2 * defaultSpacing;
+    tableWidth += widget.numSpacers * defaultSpacing;
+    for (var columnWidth in widget.columnWidths) {
+      tableWidth += columnWidth;
+    }
+    return tableWidth;
+  }
 
   Widget _buildItem(BuildContext context, int index) {
     return widget.rowBuilder(
@@ -751,7 +892,7 @@ class _TableState<T> extends State<_Table<T>> with AutoDisposeMixin {
   Widget build(BuildContext context) {
     final itemDelegate = SliverChildBuilderDelegate(
       _buildItem,
-      childCount: widget.itemCount,
+      childCount: widget.data.length,
     );
 
     // If we're at the end already, scroll to expose the new content.
@@ -823,7 +964,7 @@ abstract class ColumnRenderer<T> {
   ///
   /// This method can return `null` to indicate that the default rendering
   /// should be used instead.
-  Widget build(BuildContext context, T data);
+  Widget build(BuildContext context, T data, {bool isRowSelected = false});
 }
 
 /// Callback for when a specific item in a table is selected.
@@ -850,7 +991,10 @@ class TableRow<T> extends StatefulWidget {
     this.onExpansionCompleted,
     this.isExpanded = false,
     this.isExpandable = false,
+    this.isSelected = false,
     this.isShown = true,
+    this.searchMatchesNotifier,
+    this.activeSearchMatchNotifier,
   })  : sortColumn = null,
         sortDirection = null,
         onSortChanged = null,
@@ -870,11 +1014,14 @@ class TableRow<T> extends StatefulWidget {
   })  : node = null,
         isExpanded = false,
         isExpandable = false,
+        isSelected = false,
         expandableColumn = null,
         isShown = true,
         backgroundColor = null,
         expansionChildren = null,
         onExpansionCompleted = null,
+        searchMatchesNotifier = null,
+        activeSearchMatchNotifier = null,
         super(key: key);
 
   final LinkedScrollControllerGroup linkedScrollControllerGroup;
@@ -883,6 +1030,7 @@ class TableRow<T> extends StatefulWidget {
   final List<ColumnData<T>> columns;
   final ItemCallback<T> onPressed;
   final List<double> columnWidths;
+  final bool isSelected;
 
   /// Which column, if any, should show expansion affordances
   /// and nested rows.
@@ -922,15 +1070,29 @@ class TableRow<T> extends StatefulWidget {
 
   final Function(ColumnData<T> column, SortDirection direction) onSortChanged;
 
+  final ValueListenable<List<T>> searchMatchesNotifier;
+
+  final ValueListenable<T> activeSearchMatchNotifier;
+
+  int get numSpacers => max(0, columns.length - 1);
+
   @override
   _TableRowState<T> createState() => _TableRowState<T>();
 }
 
 class _TableRowState<T> extends State<TableRow<T>>
-    with TickerProviderStateMixin, CollapsibleAnimationMixin {
+    with
+        TickerProviderStateMixin,
+        CollapsibleAnimationMixin,
+        AutoDisposeMixin,
+        SearchableMixin {
   Key contentKey;
 
   ScrollController scrollController;
+
+  bool isSearchMatch = false;
+
+  bool isActiveSearchMatch = false;
 
   @override
   void initState() {
@@ -946,6 +1108,8 @@ class _TableRowState<T> extends State<TableRow<T>>
         widget.onExpansionCompleted();
       }
     });
+
+    _initSearchListeners();
   }
 
   @override
@@ -957,6 +1121,9 @@ class _TableRowState<T> extends State<TableRow<T>>
       scrollController?.dispose();
       scrollController = widget.linkedScrollControllerGroup.addAndGet();
     }
+
+    cancel();
+    _initSearchListeners();
   }
 
   @override
@@ -970,9 +1137,9 @@ class _TableRowState<T> extends State<TableRow<T>>
     final row = tableRowFor(context);
 
     final box = SizedBox(
-      height: defaultRowHeight,
+      height: widget.node == null ? areaPaneHeaderHeight : defaultRowHeight,
       child: Material(
-        color: widget.backgroundColor ?? Theme.of(context).canvasColor,
+        color: _searchAwareBackgroundColor(),
         child: widget.onPressed != null
             ? InkWell(
                 canRequestFocus: false,
@@ -1006,6 +1173,59 @@ class _TableRowState<T> extends State<TableRow<T>>
         );
       },
     );
+  }
+
+  void _initSearchListeners() {
+    if (widget.searchMatchesNotifier != null) {
+      searchMatches = widget.searchMatchesNotifier.value;
+      isSearchMatch = searchMatches.contains(widget.node);
+      addAutoDisposeListener(widget.searchMatchesNotifier, () {
+        final isPreviousMatch = searchMatches.contains(widget.node);
+        searchMatches = widget.searchMatchesNotifier.value;
+        final isNewMatch = searchMatches.contains(widget.node);
+
+        // We only want to rebuild the row if it the match status has changed.
+        if (isPreviousMatch != isNewMatch) {
+          setState(() {
+            isSearchMatch = isNewMatch;
+          });
+        }
+      });
+    }
+
+    if (widget.activeSearchMatchNotifier != null) {
+      activeSearchMatch = widget.activeSearchMatchNotifier.value;
+      isActiveSearchMatch = activeSearchMatch == widget.node;
+      addAutoDisposeListener(widget.activeSearchMatchNotifier, () {
+        final isPreviousActiveSearchMatch = activeSearchMatch == widget.node;
+        activeSearchMatch = widget.activeSearchMatchNotifier.value;
+        final isNewActiveSearchMatch = activeSearchMatch == widget.node;
+
+        // We only want to rebuild the row if it the match status has changed.
+        if (isPreviousActiveSearchMatch != isNewActiveSearchMatch) {
+          setState(() {
+            isActiveSearchMatch = isNewActiveSearchMatch;
+          });
+        }
+      });
+    }
+  }
+
+  Color _searchAwareBackgroundColor() {
+    final backgroundColor =
+        widget.backgroundColor ?? titleSolidBackgroundColor(Theme.of(context));
+    if (widget.isSelected) {
+      return defaultSelectionColor;
+    }
+    final searchAwareBackgroundColor = isSearchMatch
+        ? Color.alphaBlend(
+            isActiveSearchMatch
+                ? activeSearchMatchColorOpaque
+                : searchMatchColorOpaque,
+            backgroundColor,
+          )
+        : backgroundColor;
+    return searchAwareBackgroundColor;
   }
 
   Alignment _alignmentFor(ColumnData<T> column) {
@@ -1053,8 +1273,7 @@ class _TableRowState<T> extends State<TableRow<T>>
                       : Icons.expand_more,
                   size: defaultIconSize,
                 ),
-              if (isSortColumn)
-                const SizedBox(width: densePadding),
+              if (isSortColumn) const SizedBox(width: densePadding),
               // TODO: This Flexible wrapper was added to get the
               // network_profiler_test.dart tests to pass.
               Flexible(
@@ -1068,9 +1287,14 @@ class _TableRowState<T> extends State<TableRow<T>>
         );
       } else {
         final padding = column.getNodeIndentPx(node);
+        assert(padding >= 0);
 
         if (column is ColumnRenderer) {
-          content = (column as ColumnRenderer).build(context, node);
+          content = (column as ColumnRenderer).build(
+            context,
+            node,
+            isRowSelected: widget.isSelected,
+          );
         }
         content ??= Text(
           column.getDisplayValue(node),
@@ -1120,17 +1344,24 @@ class _TableRowState<T> extends State<TableRow<T>>
       child: ListView.builder(
         scrollDirection: Axis.horizontal,
         controller: scrollController,
-        itemCount: widget.columns.length,
-        itemBuilder: (context, int i) => columnFor(
-          widget.columns[i],
-          widget.columnWidths[i],
-        ),
+        itemCount: widget.columns.length + widget.numSpacers,
+        itemBuilder: (context, int i) {
+          if (i % 2 == 1) {
+            return const SizedBox(width: defaultSpacing);
+          }
+          return columnFor(
+            widget.columns[i ~/ 2],
+            widget.columnWidths[i ~/ 2],
+          );
+        },
       ),
     );
   }
 
   TextStyle contentTextStyle(ColumnData<T> column) {
-    final textColor = column.getTextColor(widget.node);
+    final textColor = widget.isSelected
+        ? defaultSelectionForegroundColor
+        : column.getTextColor(widget.node);
     final fontStyle = fixedFontStyle(context);
     return textColor == null ? fontStyle : fontStyle.copyWith(color: textColor);
   }

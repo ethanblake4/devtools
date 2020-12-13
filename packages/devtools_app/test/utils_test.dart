@@ -347,6 +347,31 @@ void main() {
       expect(getSimpleStackFrameName(name), equals(name));
     });
 
+    test('devToolsQueryParams', () {
+      expect(
+        devToolsQueryParams('http://localhost:123/?key=value.json&key2=123'),
+        equals({
+          'key': 'value.json',
+          'key2': '123',
+        }),
+      );
+      expect(
+        devToolsQueryParams('http://localhost:123/#/?key=value.json&key2=123'),
+        equals({
+          'key': 'value.json',
+          'key2': '123',
+        }),
+      );
+      expect(
+        devToolsQueryParams(
+            'http://localhost:9101/#/appsize?key=value.json&key2=123'),
+        equals({
+          'key': 'value.json',
+          'key2': '123',
+        }),
+      );
+    });
+
     group('pluralize', () {
       test('zero', () {
         expect(pluralize('cat', 0), 'cats');
@@ -876,6 +901,14 @@ void main() {
         expect(toCssHexColor(Colors.black), equals('#000000ff'));
         expect(toCssHexColor(Colors.white), equals('#ffffffff'));
         expect(toCssHexColor(const Color(0xFFAABBCC)), equals('#aabbccff'));
+      });
+    });
+
+    group('ListExtension', () {
+      test('joinWith generates correct list', () {
+        expect([1, 2, 3, 4].joinWith(0), equals([1, 0, 2, 0, 3, 0, 4]));
+        expect([1].joinWith(0), equals([1]));
+        expect(['a', 'b'].joinWith('z'), equals(['a', 'z', 'b']));
       });
     });
   });

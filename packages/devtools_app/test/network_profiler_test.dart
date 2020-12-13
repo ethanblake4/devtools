@@ -3,16 +3,17 @@
 // found in the LICENSE file.
 
 @TestOn('vm')
-import 'package:devtools_app/src/split.dart';
+import 'package:devtools_app/src/common_widgets.dart';
 import 'package:devtools_app/src/globals.dart';
 import 'package:devtools_app/src/http/http.dart';
 import 'package:devtools_app/src/http/http_request_data.dart';
+import 'package:devtools_app/src/network/network_controller.dart';
 import 'package:devtools_app/src/network/network_model.dart';
 import 'package:devtools_app/src/network/network_request_inspector.dart';
 import 'package:devtools_app/src/network/network_request_inspector_views.dart';
 import 'package:devtools_app/src/network/network_screen.dart';
-import 'package:devtools_app/src/network/network_controller.dart';
 import 'package:devtools_app/src/service_manager.dart';
+import 'package:devtools_app/src/split.dart';
 import 'package:devtools_app/src/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -55,9 +56,10 @@ void main() {
   group('Network Profiler', () {
     setUp(() async {
       fakeServiceManager = FakeServiceManager(
-        useFakeService: true,
-        timelineData: timeline,
-        socketProfile: socketProfile,
+        service: FakeServiceManager.createFakeService(
+          timelineData: timeline,
+          socketProfile: socketProfile,
+        ),
       );
       (fakeServiceManager.service as FakeVmService)
           .httpEnableTimelineLoggingResult = false;
@@ -76,23 +78,22 @@ void main() {
       WidgetTester tester,
     ) async {
       controller = NetworkController();
-      await pumpNetworkScreen(tester);
 
       // Ensure we're not recording initially.
       expect(controller.isPolling, false);
       expect(controller.recordingNotifier.value, false);
 
-      // Start recording.
-      await tester.tap(find.byKey(NetworkScreen.recordButtonKey));
-      await tester.pump();
+      await pumpNetworkScreen(tester);
+      await tester.pumpAndSettle();
 
       // Check that we're polling.
       expect(controller.isPolling, true);
       expect(controller.recordingNotifier.value, true);
 
-      // Stop recording.
-      await tester.tap(find.byKey(NetworkScreen.stopButtonKey));
-      await tester.pump();
+      // Pause recording.
+      expect(find.byType(PauseButton), findsOneWidget);
+      await tester.tap(find.byType(PauseButton));
+      await tester.pumpAndSettle();
 
       // Check that we've stopped polling.
       expect(controller.isPolling, false);
@@ -102,24 +103,10 @@ void main() {
     });
 
     Future<void> loadRequestsAndCheck(WidgetTester tester) async {
-      final splitFinder = find.byType(Split);
-
-      // We're not recording; only expect the instructions and buttons to be
-      // visible.
-      expect(splitFinder, findsNothing);
-      expect(find.byKey(NetworkScreen.recordButtonKey), findsOneWidget);
-      expect(find.byKey(NetworkScreen.stopButtonKey), findsOneWidget);
-      expect(find.byKey(NetworkScreen.clearButtonKey), findsOneWidget);
-      expect(
-        find.byKey(NetworkScreen.recordingInstructionsKey),
-        findsOneWidget,
-      );
-
-      // Start recording.
-      await tester.tap(find.byKey(NetworkScreen.recordButtonKey));
-      await tester.pump();
-
-      expect(splitFinder, findsOneWidget);
+      expect(find.byType(ResumeButton), findsOneWidget);
+      expect(find.byType(PauseButton), findsOneWidget);
+      expect(find.byType(ClearButton), findsOneWidget);
+      expect(find.byType(Split), findsOneWidget);
 
       // Advance the clock to populate the network requests table.
       await tester.pump(const Duration(seconds: 1));
@@ -153,6 +140,7 @@ void main() {
 
         expect(find.byType(NetworkRequestOverviewView), findsNothing);
         expect(find.byType(HttpRequestHeadersView), findsOneWidget);
+        expect(find.byType(HttpResponseView), findsNothing);
         expect(find.byType(HttpRequestCookiesView), findsNothing);
 
         // TODO(kenz): move the headers tab validation into its own testing
@@ -172,14 +160,27 @@ void main() {
         // Check contents of request headers.
         final ExpansionTile requestsTile =
             tester.widget(find.byKey(HttpRequestHeadersView.requestHeadersKey));
-        final numRequestHeaders = data.requestHeaders.length;
+        final numRequestHeaders = data.requestHeaders?.length ?? 0;
         expect(requestsTile.children.length, numRequestHeaders);
 
         // Check contents of response headers.
         final ExpansionTile responsesTile = tester
             .widget(find.byKey(HttpRequestHeadersView.responseHeadersKey));
-        final numResponseHeaders = data.responseHeaders.length;
+        final numResponseHeaders = data.responseHeaders?.length ?? 0;
         expect(responsesTile.children.length, numResponseHeaders);
+      }
+
+      Future<void> validateResponseTab(HttpRequestData data) async {
+        if (data.responseBody != null) {
+          // Switch to response tab.
+          await tester.tap(find.byKey(NetworkRequestInspector.responseTabKey));
+          await tester.pumpAndSettle();
+
+          expect(find.byType(NetworkRequestOverviewView), findsNothing);
+          expect(find.byType(HttpRequestHeadersView), findsNothing);
+          expect(find.byType(HttpResponseView), findsOneWidget);
+          expect(find.byType(HttpRequestCookiesView), findsNothing);
+        }
       }
 
       Future<void> validateOverviewTab(NetworkRequest data) async {
@@ -189,6 +190,7 @@ void main() {
 
         expect(find.byType(NetworkRequestOverviewView), findsOneWidget);
         expect(find.byType(HttpRequestHeadersView), findsNothing);
+        expect(find.byType(HttpResponseView), findsNothing);
         expect(find.byType(HttpRequestCookiesView), findsNothing);
       }
 
@@ -203,6 +205,7 @@ void main() {
 
           expect(find.byType(NetworkRequestOverviewView), findsNothing);
           expect(find.byType(HttpRequestHeadersView), findsNothing);
+          expect(find.byType(HttpResponseView), findsNothing);
           expect(find.byType(HttpRequestCookiesView), findsOneWidget);
 
           // TODO(kenz): move the cookie tab validation into its own testing
@@ -244,11 +247,8 @@ void main() {
         }
       }
 
-      // TODO(devoncarew): The tests don't pass if we try and test more than one
-      // http request.
-      for (final request in controller.requests.value.requests.sublist(0, 1)) {
-        // Tap a row and ensure the inspector is populated.
-        await tester.tap(find.byKey(ValueKey(request)));
+      for (final request in controller.requests.value.requests) {
+        controller.selectRequest(request);
         await tester.pumpAndSettle();
         expect(
           find.byKey(NetworkRequestInspector.noRequestSelectedKey),
@@ -258,13 +258,14 @@ void main() {
         final selection = controller.selectedRequest.value;
         if (selection is HttpRequestData) {
           await validateHeadersTab(selection);
+          await validateResponseTab(selection);
           await validateCookiesTab(selection);
         }
         await validateOverviewTab(selection);
       }
 
-      // Stop recording.
-      await tester.tap(find.byKey(NetworkScreen.stopButtonKey));
+      // Pause recording.
+      await tester.tap(find.byType(PauseButton));
       await tester.pump();
 
       await clearTimeouts(tester);
@@ -279,23 +280,14 @@ void main() {
       // Populate the screen with requests.
       await loadRequestsAndCheck(tester);
 
-      // Stop the profiler.
-      await tester.tap(find.byKey(NetworkScreen.stopButtonKey));
+      // Pause the profiler.
+      await tester.tap(find.byType(PauseButton));
       await tester.pumpAndSettle();
 
       // Clear the results.
-      await tester.tap(find.byKey(NetworkScreen.clearButtonKey));
+      await tester.tap(find.byType(ClearButton));
       // Wait to ensure all the timers have been cancelled.
       await tester.pumpAndSettle(const Duration(seconds: 2));
-
-      // Ensure that the recording instructions are displayed when no requests
-      // are displayed and recording is disabled.
-      expect(find.byType(PaginatedDataTable), findsNothing);
-      expect(find.byType(NetworkRequestInspector), findsNothing);
-      expect(
-        find.byKey(NetworkScreen.recordingInstructionsKey),
-        findsOneWidget,
-      );
     });
   });
 

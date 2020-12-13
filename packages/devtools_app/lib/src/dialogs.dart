@@ -39,9 +39,8 @@ class DevToolsDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
         children: [
           title,
           const PaddedDivider(
@@ -53,6 +52,7 @@ class DevToolsDialog extends StatelessWidget {
           contentPadding, 0, contentPadding, contentPadding),
       content: content,
       actions: actions,
+      buttonPadding: const EdgeInsets.symmetric(horizontal: defaultSpacing),
     );
   }
 }
@@ -83,20 +83,20 @@ class DialogCancelButton extends StatelessWidget {
   }
 }
 
-/// A FlatButton used to close a containing dialog (OK).
-class DialogOkButton extends StatelessWidget {
-  const DialogOkButton(this.onOk) : super();
+/// A FlatButton used to close a containing dialog (APPLY).
+class DialogApplyButton extends StatelessWidget {
+  const DialogApplyButton({@required this.onPressed}) : super();
 
-  final Function onOk;
+  final Function onPressed;
 
   @override
   Widget build(BuildContext context) {
     return FlatButton(
       onPressed: () {
-        if (onOk != null) onOk();
+        if (onPressed != null) onPressed();
         Navigator.of(context).pop(_dialogDefaultContext);
       },
-      child: const Text('OK'),
+      child: const Text('APPLY'),
     );
   }
 }

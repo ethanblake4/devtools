@@ -53,26 +53,17 @@ SocketProfile loadSocketProfile() {
   ]);
 }
 
-Future<TreemapNode> loadInstructionSizesJsonAsTree() async {
-  const testDataPath = 'sizes';
-  final treemapTestData = jsonDecode(
-    await File(testDataPath).readAsString(),
-  );
-  final processedTestData = treemapFromJson(treemapTestData);
-  processedTestData['n'] = 'Root';
+Future<TreemapNode> loadSnapshotJsonAsTree(String snapshotJson) async {
+  final treemapTestData = jsonDecode(snapshotJson);
 
-  return generateTree(processedTestData);
-}
-
-Future<TreemapNode> loadV8JsonAsTree() async {
-  const testDataPath = 'new_v8';
-  final treemapTestData = jsonDecode(
-    await File(testDataPath).readAsString(),
-  );
-  final processedTestData = treemapFromJson(treemapTestData);
-  processedTestData['n'] = 'Root';
-
-  return generateTree(processedTestData);
+  if (treemapTestData is Map<String, dynamic> &&
+      treemapTestData['type'] == 'apk') {
+    return generateTree(treemapTestData);
+  } else {
+    final processedTestData = treemapFromJson(treemapTestData);
+    processedTestData['n'] = 'Root';
+    return generateTree(processedTestData);
+  }
 }
 
 /// Builds a tree with [TreemapNode] from [treeJson] which represents

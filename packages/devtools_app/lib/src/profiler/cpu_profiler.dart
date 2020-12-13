@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../auto_dispose_mixin.dart';
 import '../theme.dart';
+import '../ui/search.dart';
 import 'cpu_profile_bottom_up.dart';
 import 'cpu_profile_call_tree.dart';
 import 'cpu_profile_controller.dart';
@@ -15,8 +16,12 @@ import 'cpu_profile_transformer.dart';
 // TODO(kenz): provide useful UI upon selecting a CPU stack frame.
 
 class CpuProfiler extends StatefulWidget {
-  CpuProfiler({@required this.data, @required this.controller})
-      : bottomUpRoots = data != null
+  CpuProfiler({
+    @required this.data,
+    @required this.controller,
+    this.searchFieldKey,
+  })  : callTreeRoots = data != null ? [data.cpuProfileRoot.deepCopy()] : [],
+        bottomUpRoots = data != null
             ? BottomUpProfileTransformer.processData(data.cpuProfileRoot)
             : [];
 
@@ -24,7 +29,11 @@ class CpuProfiler extends StatefulWidget {
 
   final CpuProfilerController controller;
 
+  final List<CpuStackFrame> callTreeRoots;
+
   final List<CpuStackFrame> bottomUpRoots;
+
+  final Key searchFieldKey;
 
   static const Key expandButtonKey = Key('CpuProfiler - Expand Button');
   static const Key collapseButtonKey = Key('CpuProfiler - Collapse Button');
@@ -53,7 +62,7 @@ class CpuProfiler extends StatefulWidget {
 // TODO(kenz): preserve tab controller index when updating CpuProfiler with new
 // data. The state is being destroyed with every new cpu profile - investigate.
 class _CpuProfilerState extends State<CpuProfiler>
-    with SingleTickerProviderStateMixin, AutoDisposeMixin {
+    with SingleTickerProviderStateMixin, AutoDisposeMixin, SearchFieldMixin {
   TabController _tabController;
 
   @override
@@ -75,6 +84,10 @@ class _CpuProfilerState extends State<CpuProfiler>
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final currentTab = CpuProfiler.tabs[_tabController.index];
+    final hasData =
+        widget.data != CpuProfilerController.baseStateCpuProfileData &&
+            widget.data != null;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -87,6 +100,21 @@ class _CpuProfilerState extends State<CpuProfiler>
               controller: _tabController,
               tabs: CpuProfiler.tabs,
             ),
+            // TODO(kenz): support search for call tree and bottom up tabs as
+            // well. This will require implementing search for tree tables.
+            if (currentTab.key == CpuProfiler.flameChartTab &&
+                widget.searchFieldKey != null)
+              Container(
+                width: wideSearchTextWidth,
+                height: defaultTextFieldHeight,
+                child: buildSearchField(
+                  controller: widget.controller,
+                  searchFieldKey: widget.searchFieldKey,
+                  searchFieldEnabled: hasData,
+                  shouldRequestFocus: false,
+                  supportsNavigation: true,
+                ),
+              ),
             if (currentTab.key != CpuProfiler.flameChartTab)
               Row(children: [
                 _expandAllButton(currentTab),
@@ -130,15 +158,18 @@ class _CpuProfilerState extends State<CpuProfiler>
     final cpuFlameChart = LayoutBuilder(
       builder: (context, constraints) {
         return CpuProfileFlameChart(
-          widget.data,
+          data: widget.data,
+          controller: widget.controller,
           width: constraints.maxWidth,
           height: constraints.maxHeight,
           selectionNotifier: widget.controller.selectedCpuStackFrameNotifier,
+          searchMatchesNotifier: widget.controller.searchMatches,
+          activeSearchMatchNotifier: widget.controller.activeSearchMatch,
           onSelected: (sf) => widget.controller.selectCpuStackFrame(sf),
         );
       },
     );
-    final callTree = CpuCallTreeTable(widget.data);
+    final callTree = CpuCallTreeTable(widget.callTreeRoots);
     final bottomUp = CpuBottomUpTable(widget.bottomUpRoots);
     // TODO(kenz): make this order configurable.
     return [cpuFlameChart, callTree, bottomUp];
@@ -169,7 +200,7 @@ class _CpuProfilerState extends State<CpuProfiler>
     Tab currentTab,
   ) {
     final roots = currentTab.key == CpuProfiler.callTreeTab
-        ? [widget.data.cpuProfileRoot]
+        ? widget.callTreeRoots
         : widget.bottomUpRoots;
     setState(() {
       roots.forEach(callback);

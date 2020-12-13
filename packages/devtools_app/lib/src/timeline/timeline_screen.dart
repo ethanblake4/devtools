@@ -8,6 +8,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../analytics/analytics_stub.dart'
+    if (dart.library.html) '../analytics/analytics.dart' as ga;
 import '../auto_dispose_mixin.dart';
 import '../banner_messages.dart';
 import '../common_widgets.dart';
@@ -41,13 +43,6 @@ class TimelineScreen extends Screen {
           icon: Octicons.pulse,
         );
 
-  @visibleForTesting
-  static const refreshButtonKey = Key('Refresh Button');
-  @visibleForTesting
-  static const clearButtonKey = Key('Clear Button');
-  @visibleForTesting
-  static const exportButtonKey = Key('Export Button');
-
   static const id = 'timeline';
 
   @override
@@ -76,6 +71,12 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
   bool processing = false;
 
   double processingProgress = 0.0;
+
+  @override
+  void initState() {
+    super.initState();
+    ga.screen(TimelineScreen.id);
+  }
 
   @override
   void didChangeDependencies() {
@@ -148,7 +149,6 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
               builder: (context, displayRefreshRate, _) {
                 return FlutterFramesChart(
                   frames,
-                  controller.longestFramePortionMs,
                   displayRefreshRate,
                 );
               },
@@ -185,9 +185,7 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
         if (loadingOfflineData)
           Container(
             color: Theme.of(context).scaffoldBackgroundColor,
-            child: const Center(
-              child: CircularProgressIndicator(),
-            ),
+            child: const CenteredCircularProgressIndicator(),
           ),
       ],
     );
@@ -209,20 +207,14 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
       builder: (context, refreshing, _) {
         return Row(
           children: [
-            refreshButton(
-              key: TimelineScreen.refreshButtonKey,
-              busy: refreshing || processing,
+            RefreshButton(
               includeTextWidth: _primaryControlsMinIncludeTextWidth,
-              onPressed: _refreshTimeline,
+              onPressed: (refreshing || processing) ? null : _refreshTimeline,
             ),
             const SizedBox(width: defaultSpacing),
-            clearButton(
-              key: TimelineScreen.clearButtonKey,
-              busy: refreshing || processing,
+            ClearButton(
               includeTextWidth: _primaryControlsMinIncludeTextWidth,
-              onPressed: () async {
-                await _clearTimeline();
-              },
+              onPressed: (refreshing || processing) ? null : _clearTimeline,
             ),
           ],
         );
@@ -245,7 +237,6 @@ class TimelineScreenBodyState extends State<TimelineScreenBody>
         // available.
         const SizedBox(width: defaultSpacing),
         ExportButton(
-          key: TimelineScreen.exportButtonKey,
           onPressed: _exportTimeline,
           includeTextWidth: _secondaryControlsMinIncludeTextWidth,
         ),
@@ -319,6 +310,7 @@ class TimelineConfigurationsDialog extends StatelessWidget {
       content: Container(
         width: dialogWidth,
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             ..._defaultRecordedStreams(theme),

@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 @TestOn('vm')
+import 'package:devtools_app/src/common_widgets.dart';
 import 'package:devtools_app/src/globals.dart';
 import 'package:devtools_app/src/service_manager.dart';
 import 'package:devtools_app/src/split.dart';
@@ -27,8 +28,9 @@ void main() {
 
   void _setUpServiceManagerForTimeline(Map<String, dynamic> timelineJson) {
     fakeServiceManager = FakeServiceManager(
-      useFakeService: true,
-      timelineData: vm_service.Timeline.parse(timelineJson),
+      service: FakeServiceManager.createFakeService(
+        timelineData: vm_service.Timeline.parse(timelineJson),
+      ),
     );
     when(fakeServiceManager.connectedApp.isDartWebAppNow).thenReturn(false);
     when(fakeServiceManager.connectedApp.isFlutterAppNow).thenReturn(true);
@@ -79,8 +81,8 @@ void main() {
       expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
           findsNothing);
       expect(find.byType(EventDetails), findsOneWidget);
-      expect(find.byKey(TimelineScreen.refreshButtonKey), findsOneWidget);
-      expect(find.byKey(TimelineScreen.clearButtonKey), findsOneWidget);
+      expect(find.byType(RefreshButton), findsOneWidget);
+      expect(find.byType(ClearButton), findsOneWidget);
 
       // Verify the state of the splitter.
       final splitFinder = find.byType(Split);
@@ -100,7 +102,7 @@ void main() {
           findsNothing);
       expect(find.byType(EventDetails), findsOneWidget);
 
-      await tester.tap(find.byKey(TimelineScreen.clearButtonKey));
+      await tester.tap(find.byType(ClearButton));
       await tester.pump();
       expect(controller.allTraceEvents, isEmpty);
       expect(find.byType(FlutterFramesChart), findsOneWidget);
@@ -119,7 +121,7 @@ void main() {
           findsOneWidget);
 
       // Refresh with empty timeline.
-      await tester.tap(find.byKey(TimelineScreen.refreshButtonKey));
+      await tester.tap(find.byType(RefreshButton));
       await tester.pump();
       expect(find.byKey(TimelineFlameChartContainer.emptyTimelineKey),
           findsOneWidget);

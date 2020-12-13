@@ -4,8 +4,7 @@
 
 @TestOn('vm')
 import 'package:devtools_app/src/globals.dart';
-import 'package:devtools_app/src/initializer.dart'
-    hide ensureInspectorDependencies;
+import 'package:devtools_app/src/initializer.dart';
 import 'package:devtools_app/src/service_manager.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +18,7 @@ void main() {
     const Key initializedKey = Key('initialized');
     setUp(() async {
       await ensureInspectorDependencies();
-      final serviceManager = FakeServiceManager(useFakeService: true);
+      final serviceManager = FakeServiceManager();
       when(serviceManager.connectedApp.isDartWebApp)
           .thenAnswer((_) => Future.value(false));
       setGlobal(
@@ -42,7 +41,9 @@ void main() {
         (WidgetTester tester) async {
       setGlobal(
         ServiceConnectionManager,
-        FakeServiceManager(useFakeService: true, hasConnection: false),
+        FakeServiceManager(
+          hasConnection: false,
+        ),
       );
 
       await tester.pumpFrames(app, const Duration(milliseconds: 100));
@@ -51,7 +52,7 @@ void main() {
 
     testWidgets('shows disconnected overlay upon disconnect',
         (WidgetTester tester) async {
-      final serviceManager = FakeServiceManager(useFakeService: true);
+      final serviceManager = FakeServiceManager();
       setGlobal(ServiceConnectionManager, serviceManager);
 
       // Expect standard connected state.
@@ -69,7 +70,7 @@ void main() {
 
     testWidgets('closes disconnected overlay upon reconnect',
         (WidgetTester tester) async {
-      final serviceManager = FakeServiceManager(useFakeService: true);
+      final serviceManager = FakeServiceManager();
       setGlobal(ServiceConnectionManager, serviceManager);
 
       // Trigger a disconnect and ensure the overlay appears.

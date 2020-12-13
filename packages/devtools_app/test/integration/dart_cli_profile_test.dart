@@ -8,9 +8,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:devtools_app/src/analytics/stub_provider.dart';
 import 'package:devtools_app/src/app.dart';
 import 'package:devtools_app/src/framework/framework_core.dart';
-import 'package:devtools_app/src/inspector/flutter_widget.dart';
 import 'package:devtools_app/src/preferences.dart';
 import 'package:devtools_shared/devtools_shared.dart';
 import 'package:devtools_testing/support/file_utils.dart';
@@ -45,7 +45,6 @@ Future<void> main() async {
     const FlutterRunConfiguration(withDebugger: true),
   );
   compensateForFlutterTestDirectoryBug();
-  Catalog.setCatalog(Catalog.decode(await widgetsJson()));
 
   group('Whole app', () {
     testWidgets('CLI Memory Profile Collection', (tester) async {
@@ -55,7 +54,12 @@ Future<void> main() async {
       await preferences.init();
       final app = DefaultAssetBundle(
         bundle: _DiskAssetBundle(),
-        child: DevToolsApp(const [], preferences, const RouteSettings(), null),
+        child: DevToolsApp(
+          const [],
+          preferences,
+          null,
+          await analyticsProvider,
+        ),
       );
       await tester.pumpWidget(app);
       await tester.pumpAndSettle();
@@ -64,7 +68,9 @@ Future<void> main() async {
 
       if (Platform.isLinux || Platform.isMacOS) {
         var vmUri = env.flutter.vmServiceUri.replace(scheme: 'http').toString();
-        vmUri = vmUri.endsWith('/ws') ? vmUri.substring(0, vmUri.length - 2) : vmUri;
+        vmUri = vmUri.endsWith('/ws')
+            ? vmUri.substring(0, vmUri.length - 2)
+            : vmUri;
 
         try {
           final workingDirectory = Directory.current.path;
@@ -85,8 +91,12 @@ Future<void> main() async {
           // content matches the values displayed in the verbose messages.
           final parseOutput = ParseStdout();
 
-          process.stdout.transform(utf8.decoder).listen(parseOutput.parseStdout);
-          process.stderr.transform(utf8.decoder).listen(parseOutput.parseStderr);
+          process.stdout
+              .transform(utf8.decoder)
+              .listen(parseOutput.parseStdout);
+          process.stderr
+              .transform(utf8.decoder)
+              .listen(parseOutput.parseStderr);
 
           // Collect some memory statistics.
           Future.delayed(const Duration(seconds: 5), () async {
@@ -148,11 +158,13 @@ void validateJSONFile(List<Verbose> values) {
   var samplesIndex = 0;
   for (var value in values) {
     final intl.DateFormat mFormat = intl.DateFormat('hh:mm:ss.mmm');
-    final timeCollected = mFormat.format(DateTime.fromMillisecondsSinceEpoch(samples[samplesIndex].timestamp));
+    final timeCollected = mFormat.format(
+        DateTime.fromMillisecondsSinceEpoch(samples[samplesIndex].timestamp));
 
     expect(timeCollected, equals(value.time));
     expect(samples[samplesIndex].capacity, equals(value.capacity));
-    expect(samples[samplesIndex].adbMemoryInfo.total, equals(value.adbMemoryTotal));
+    expect(samples[samplesIndex].adbMemoryInfo.total,
+        equals(value.adbMemoryTotal));
 
     samplesIndex++;
   }
@@ -192,7 +204,8 @@ class ParseStdout {
 
   void parseStdout(String lineOut) {
     if (_headerMatch == null && lineOut.startsWith(_headerTemplate)) {
-      _headerMatch = lineOut.substring(_headerTemplate.length).trim() == jsonFilename;
+      _headerMatch =
+          lineOut.substring(_headerTemplate.length).trim() == jsonFilename;
       expect(_headerMatch, isTrue);
     } else if (lineOut.startsWith(verboseMessageStart)) {
       // Parse parts of the verbose message.
@@ -204,14 +217,16 @@ class ParseStdout {
       final timePart = startTimePart.substring(0, endTimePart);
 
       // Pull out the two numeric values capacity and ADB Memory Total.
-      final List<String> remaining = startTimePart.substring(endTimePart).split('=');
+      final List<String> remaining =
+          startTimePart.substring(endTimePart).split('=');
       expect(remaining[0], equals(capacityStartPart));
 
       // Capacity part.
       expect(remaining[1].endsWith(capacityValueEndPart), isTrue);
       final capacityValueEnd = remaining[1].indexOf(',');
       expect(capacityValueEnd, isNonNegative);
-      final capacityValue = int.parse(remaining[1].substring(0, capacityValueEnd));
+      final capacityValue =
+          int.parse(remaining[1].substring(0, capacityValueEnd));
 
       // ADB part.
       final adbTotal = int.parse(remaining[2].trim());

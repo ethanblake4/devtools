@@ -5,11 +5,13 @@
 import 'package:flutter/material.dart';
 import 'package:vm_service/vm_service.dart' hide Stack;
 
+import '../analytics/analytics_stub.dart'
+    if (dart.library.html) '../analytics/analytics.dart' as ga;
+import '../analytics/constants.dart';
 import '../auto_dispose_mixin.dart';
 import '../blocking_action_mixin.dart';
 import '../connected_app.dart';
 import '../globals.dart';
-import '../initializer.dart';
 import '../octicons.dart';
 import '../screen.dart';
 import '../service_extensions.dart' as extensions;
@@ -25,12 +27,14 @@ import 'inspector_tree_flutter.dart';
 class InspectorScreen extends Screen {
   const InspectorScreen()
       : super.conditional(
-          id: 'inspector',
+          id: id,
           requiresLibrary: flutterLibraryUri,
           requiresDebugBuild: true,
           title: 'Flutter Inspector',
           icon: Octicons.deviceMobile,
         );
+
+  static const id = 'inspector';
 
   @override
   String get docPageId => screenId;
@@ -64,8 +68,7 @@ class _InspectorScreenBodyState extends State<InspectorScreenBody>
   @override
   void initState() {
     super.initState();
-    // TODO(jacobr): support analytics.
-    // ga_platform.setupDimensions();
+    ga.screen(InspectorScreen.id);
     autoDispose(
         serviceManager.onConnectionAvailable.listen(_handleConnectionStart));
     if (serviceManager.hasConnection) {
@@ -113,7 +116,7 @@ class _InspectorScreenBodyState extends State<InspectorScreenBody>
           children: [
             ValueListenableBuilder(
               valueListenable: serviceManager.serviceExtensionManager
-                  .hasServiceExtensionListener(
+                  .hasServiceExtension(
                       extensions.toggleSelectWidgetMode.extension),
               builder: (_, selectModeSupported, __) {
                 return ServiceExtensionButtonGroup(
@@ -176,7 +179,10 @@ class _InspectorScreenBodyState extends State<InspectorScreenBody>
       const SizedBox(width: denseSpacing),
       ServiceExtensionButtonGroup(
         minIncludeTextWidth: 1250,
-        extensions: [extensions.repaintRainbow, extensions.debugAllowBanner],
+        extensions: [
+          extensions.repaintRainbow,
+          extensions.invertOversizedImages,
+        ],
       ),
       // TODO(jacobr): implement TogglePlatformSelector.
       //  TogglePlatformSelector().selector
@@ -234,7 +240,6 @@ class _InspectorScreenBodyState extends State<InspectorScreenBody>
 
     try {
       // Init the inspector service, or return null.
-      await ensureInspectorDependencies();
       await ensureInspectorServiceDependencies();
       inspectorService =
           await InspectorService.create(service).catchError((e) => null);
@@ -289,8 +294,7 @@ class _InspectorScreenBodyState extends State<InspectorScreenBody>
   }
 
   void _refreshInspector() {
-    // TODO(jacobr): support analytics.
-    // ga.select(ga.inspector, ga.refresh);
+    ga.select(inspector, refresh);
     blockWhileInProgress(() async {
       await inspectorController?.onForceRefresh();
     });

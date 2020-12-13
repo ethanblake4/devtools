@@ -2,13 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
+import '../../../common_widgets.dart';
 import '../../../theme.dart';
 import '../../../ui/theme.dart';
 import '../../../utils.dart';
@@ -392,7 +393,7 @@ class _FlexLayoutExplorerWidgetState extends State<FlexLayoutExplorerWidget>
 
   Size get size => properties.size;
 
-  List<LayoutProperties> get children => properties.children;
+  List<LayoutProperties> get children => properties.displayChildren;
 
   Axis get direction => properties.direction;
 
@@ -1164,8 +1165,8 @@ class FlexChildVisualizer extends StatelessWidget {
         opacity: min([state.entranceCurve.value * 5, 1.0]),
         child: Padding(
           padding: EdgeInsets.symmetric(
-            horizontal: (renderSize.width - size.width) / 2,
-            vertical: (renderSize.height - size.height) / 2,
+            horizontal: math.max(0.0, (renderSize.width - size.width) / 2),
+            vertical: math.max(0.0, (renderSize.height - size.height) / 2),
           ),
           child: child,
         ),
@@ -1245,7 +1246,8 @@ class WidgetVisualizer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final properties = layoutProperties;
     Color borderColor = regularWidgetColor;
     if (properties is FlexLayoutProperties) {
@@ -1317,7 +1319,7 @@ class WidgetVisualizer extends StatelessWidget {
         border: Border.all(
           color: borderColor,
         ),
-        color: colorScheme.backgroundColor,
+        color: theme.canvasColor.darken(),
       ),
     );
   }

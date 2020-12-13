@@ -2,17 +2,19 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:async';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' hide Stack;
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:vm_service/vm_service.dart';
 
+import '../analytics/analytics_stub.dart'
+    if (dart.library.html) '../analytics/analytics.dart' as ga;
 import '../auto_dispose_mixin.dart';
 import '../common_widgets.dart';
 import '../config_specific/host_platform/host_platform.dart';
 import '../flex_split_column.dart';
+import '../listenable.dart';
 import '../octicons.dart';
 import '../screen.dart';
 import '../split.dart';
@@ -34,17 +36,20 @@ const bool debugShowCallStackCount = false;
 class DebuggerScreen extends Screen {
   const DebuggerScreen()
       : super.conditional(
-          id: 'debugger',
+          id: id,
           requiresDebugBuild: true,
           title: 'Debugger',
           icon: Octicons.bug,
         );
 
+  static const id = 'debugger';
+
   @override
   String get docPageId => screenId;
 
   @override
-  bool get showIsolateSelector => true;
+  ValueListenable<bool> get showIsolateSelector =>
+      const FixedValueListenable<bool>(true);
 
   @override
   Widget build(BuildContext context) => const DebuggerScreenBody();
@@ -79,6 +84,7 @@ class DebuggerScreenBodyState extends State<DebuggerScreenBody>
   void initState() {
     super.initState();
     _libraryFilterFocusNode = FocusNode();
+    ga.screen(DebuggerScreen.id);
   }
 
   @override
@@ -206,7 +212,7 @@ class DebuggerScreenBodyState extends State<DebuggerScreenBody>
       builder: (context, constraints) {
         return FlexSplitColumn(
           totalHeight: constraints.maxHeight,
-          initialFractions: const [0.38, 0.38, 0.24],
+          initialFractions: const [0.40, 0.40, 0.20],
           minSizes: const [0.0, 0.0, 0.0],
           headers: <SizedBox>[
             areaPaneHeader(
@@ -228,7 +234,7 @@ class DebuggerScreenBodyState extends State<DebuggerScreenBody>
           children: const [
             CallStack(),
             Variables(),
-            BreakpointPicker(),
+            Breakpoints(),
           ],
         );
       },

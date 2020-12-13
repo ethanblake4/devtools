@@ -9,6 +9,7 @@ import 'dart:ui';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
 /// A [ScrollView] that uses a single child layout model and allows for custom
@@ -351,9 +352,15 @@ class _CustomPointerScrollableState extends State<CustomPointerScrollable>
   }
 
   @override
+  void saveOffset(double offset) {
+    assert(debugIsSerializableForRestoration(offset));
+    // TODO(goderbauer): enable state restoration once the framework is stable.
+  }
+
+  @override
   void didChangeDependencies() {
-    super.didChangeDependencies();
     _updatePosition();
+    super.didChangeDependencies();
   }
 
   bool _shouldUpdatePosition(CustomPointerScrollable oldWidget) {
@@ -627,10 +634,10 @@ class _CustomPointerScrollableState extends State<CustomPointerScrollable>
     properties.add(DiagnosticsProperty<ScrollPosition>('position', position));
   }
 
-  @override
+  /*@override
   void saveOffset(double offset) {
     // TODO: implement saveOffset
-  }
+  }*/
 }
 
 // The following classes were copied from the Flutter framework with minor

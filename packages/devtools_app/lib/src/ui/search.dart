@@ -22,6 +22,7 @@ mixin SearchControllerMixin<T> {
 
   set search(String value) {
     _searchNotifier.value = value;
+    refreshSearchMatches();
   }
 
   String get search => _searchNotifier.value;
@@ -29,6 +30,10 @@ mixin SearchControllerMixin<T> {
   final _searchMatches = ValueNotifier<List<T>>([]);
 
   ValueListenable<List<T>> get searchMatches => _searchMatches;
+
+  void refreshSearchMatches() {
+    updateMatches(matchesForSearch(_searchNotifier.value));
+  }
 
   void updateMatches(List<T> matches) {
     _searchMatches.value = matches;
@@ -76,6 +81,13 @@ mixin SearchControllerMixin<T> {
     assert(activeMatchIndex < searchMatches.value.length);
     _activeSearchMatch.value = searchMatches.value[activeMatchIndex];
   }
+
+  List<T> matchesForSearch(String search) => [];
+
+  void resetSearch() {
+    _searchNotifier.value = '';
+    refreshSearchMatches();
+  }
 }
 
 mixin AutoCompleteSearchControllerMixin on SearchControllerMixin {
@@ -106,6 +118,7 @@ mixin AutoCompleteSearchControllerMixin on SearchControllerMixin {
   OverlayEntry createAutoCompleteOverlay({
     @required GlobalKey searchFieldKey,
   }) {
+    // TODO(kenz): investigate whether we actually need the global key for this.
     // Find the searchField and place overlay below bottom of TextField and
     // make overlay width of TextField.
     final RenderBox box = searchFieldKey.currentContext.findRenderObject();
@@ -314,7 +327,7 @@ mixin SearchFieldMixin {
     if (supportsNavigation) {
       return SearchNavigationControls(controller, onClear: onClear);
     } else {
-      return _clearSearchButton(onClear);
+      return clearInputButton(onClear);
     }
   }
 
@@ -332,7 +345,7 @@ mixin SearchFieldMixin {
   void clearSearchField(SearchControllerMixin controller, {force = false}) {
     if (force || controller.search.isNotEmpty) {
       searchTextFieldController.clear();
-      controller.search = '';
+      controller.resetSearch();
     }
   }
 }
@@ -365,11 +378,11 @@ class SearchNavigationControls extends StatelessWidget {
                 ),
               ),
             ),
-            _searchSuffixButton(Icons.keyboard_arrow_up,
+            inputDecorationSuffixButton(Icons.keyboard_arrow_up,
                 numMatches > 1 ? controller.previousMatch : null),
-            _searchSuffixButton(Icons.keyboard_arrow_down,
+            inputDecorationSuffixButton(Icons.keyboard_arrow_down,
                 numMatches > 1 ? controller.nextMatch : null),
-            _clearSearchButton(onClear),
+            clearInputButton(onClear),
           ],
         );
       },
@@ -390,22 +403,4 @@ class SearchNavigationControls extends StatelessWidget {
       },
     );
   }
-}
-
-Widget _clearSearchButton(VoidCallback onPressed) {
-  return _searchSuffixButton(Icons.clear, onPressed);
-}
-
-Widget _searchSuffixButton(IconData icon, VoidCallback onPressed) {
-  return Container(
-    padding: const EdgeInsets.symmetric(horizontal: densePadding),
-    width: 24.0,
-    child: IconButton(
-      padding: const EdgeInsets.all(0.0),
-      onPressed: onPressed,
-      iconSize: defaultIconSize,
-      splashRadius: defaultIconSize,
-      icon: Icon(icon),
-    ),
-  );
 }

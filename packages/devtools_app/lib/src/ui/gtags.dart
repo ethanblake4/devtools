@@ -9,7 +9,7 @@ library gtags;
 
 import 'package:js/js.dart';
 
-import 'analytics.dart' as ga;
+import '../analytics/analytics.dart' as ga;
 
 /// For gtags API see https://developers.google.com/gtagjs/reference/api
 /// For debugging install the Chrome Plugin "Google Analytics Debugger".
@@ -27,11 +27,12 @@ class GTag {
 
   /// Collect the analytic's event and its parameters.
   static void event(String eventName, GtagEvent gaEvent) async {
-    if (await ga.isEnabled) _gTagCommandName(_event, eventName, gaEvent);
+    if (await ga.isAnalyticsEnabled())
+      _gTagCommandName(_event, eventName, gaEvent);
   }
 
   static void exception(GtagException gaException) async {
-    if (await ga.isEnabled) {
+    if (await ga.isAnalyticsEnabled()) {
       _gTagCommandName(_event, _exception, gaException);
     }
   }

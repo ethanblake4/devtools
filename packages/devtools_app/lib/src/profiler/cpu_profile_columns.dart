@@ -6,7 +6,11 @@ import 'cpu_profile_model.dart';
 const _timeColumnWidthPx = 160.0;
 
 class SelfTimeColumn extends ColumnData<CpuStackFrame> {
-  SelfTimeColumn() : super('Self Time', fixedWidthPx: _timeColumnWidthPx);
+  SelfTimeColumn()
+      : super(
+          'Self Time',
+          fixedWidthPx: _timeColumnWidthPx,
+        );
 
   @override
   bool get numeric => true;
@@ -32,7 +36,11 @@ class SelfTimeColumn extends ColumnData<CpuStackFrame> {
 }
 
 class TotalTimeColumn extends ColumnData<CpuStackFrame> {
-  TotalTimeColumn() : super('Total Time', fixedWidthPx: _timeColumnWidthPx);
+  TotalTimeColumn()
+      : super(
+          'Total Time',
+          fixedWidthPx: _timeColumnWidthPx,
+        );
 
   @override
   bool get numeric => true;
@@ -60,18 +68,8 @@ class TotalTimeColumn extends ColumnData<CpuStackFrame> {
 class MethodNameColumn extends TreeColumnData<CpuStackFrame> {
   MethodNameColumn() : super('Method');
 
-  static const maxMethodNameLength = 75;
-
   @override
   dynamic getValue(CpuStackFrame dataObject) => dataObject.name;
-
-  @override
-  String getDisplayValue(CpuStackFrame dataObject) {
-    if (dataObject.name.length > maxMethodNameLength) {
-      return dataObject.name.substring(0, maxMethodNameLength) + '...';
-    }
-    return dataObject.name;
-  }
 
   @override
   bool get supportsSorting => true;
@@ -82,7 +80,7 @@ class MethodNameColumn extends TreeColumnData<CpuStackFrame> {
 
 // TODO(kenz): make these urls clickable once we can jump to source.
 class SourceColumn extends ColumnData<CpuStackFrame> {
-  SourceColumn() : super('Source', alignment: ColumnAlignment.right);
+  SourceColumn() : super.wide('Source', alignment: ColumnAlignment.right);
 
   @override
   dynamic getValue(CpuStackFrame dataObject) => dataObject.url;

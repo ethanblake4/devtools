@@ -9,6 +9,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'analytics/prompt.dart';
+import 'analytics/provider.dart';
 import 'app.dart';
 import 'banner_messages.dart';
 import 'common_widgets.dart';
@@ -17,10 +19,9 @@ import 'config_specific/ide_theme/ide_theme.dart';
 import 'config_specific/import_export/import_export.dart';
 import 'framework_controller.dart';
 import 'globals.dart';
-import 'navigation.dart';
 import 'notifications.dart';
+import 'routing.dart';
 import 'screen.dart';
-import 'snapshot_screen.dart';
 import 'status_line.dart';
 import 'theme.dart';
 
@@ -34,9 +35,10 @@ class DevToolsScaffold extends StatefulWidget {
   const DevToolsScaffold({
     Key key,
     @required this.tabs,
-    this.initialPage,
+    @required this.analyticsProvider,
+    this.page,
     this.actions,
-    this.embed = false,
+    this.embed = true,
     @required this.ideTheme,
   })  : assert(tabs != null),
         super(key: key);
@@ -45,10 +47,12 @@ class DevToolsScaffold extends StatefulWidget {
     Key key,
     @required Widget child,
     @required IdeTheme ideTheme,
+    @required AnalyticsProvider analyticsProvider,
     List<Widget> actions,
   }) : this(
           key: key,
           tabs: [SimpleScreen(child)],
+          analyticsProvider: analyticsProvider,
           ideTheme: ideTheme,
           actions: actions,
         );
@@ -66,18 +70,18 @@ class DevToolsScaffold extends StatefulWidget {
   static const double narrowWidthThreshold = 1350.0;
 
   /// The size that all actions on this widget are expected to have.
-  static const double actionWidgetSize = 36.0;
+  static const double actionWidgetSize = 48.0;
 
   // Note: when changing this value, also update `flameChartContainerOffset`
   // from flame_chart.dart.
   /// The border around the content in the DevTools UI.
-  static const EdgeInsets appPadding = EdgeInsets.fromLTRB(16.0, 16.0, 16.0, 0.0);
+  static const EdgeInsets appPadding = EdgeInsets.zero;
 
   /// All of the [Screen]s that it's possible to navigate to from this Scaffold.
   final List<Screen> tabs;
 
-  /// The initial page to render.
-  final String initialPage;
+  /// The page being rendered.
+  final String page;
 
   /// Whether to render the embedded view (without the header).
   final bool embed;
@@ -89,6 +93,8 @@ class DevToolsScaffold extends StatefulWidget {
   ///
   /// These will generally be [RegisteredServiceExtensionButton]s.
   final List<Widget> actions;
+
+  final AnalyticsProvider analyticsProvider;
 
   @override
   State<StatefulWidget> createState() => DevToolsScaffoldState();
@@ -135,10 +141,17 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
       // Create a new tab controller to reflect the changed tabs.
       _setupTabController();
       _tabController.index = newIndex;
+    } else if (widget.tabs[_tabController.index].screenId != widget.page) {
+      // If the page changed (eg. the route was modified by pressing back in the
+      // browser), animate to the new one.
+      final newIndex = widget.page == null
+          ? 0 // When there's no supplied page, we show the first one.
+          : widget.tabs.indexWhere((t) => t.screenId == widget.page);
+      _tabController.animateTo(newIndex);
     }
   }
 
-  bool get isNarrow => true;
+  bool get isNarrow => MediaQuery.of(context).size.width <= DevToolsScaffold.narrowWidthThreshold;
 
   @override
   void didChangeDependencies() {
@@ -148,6 +161,9 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
       Notifications.of(context),
       _pushSnapshotScreenForImport,
     );
+    // This needs to be called at the scaffold level because we need an instance
+    // of Notifications above this context.
+    surveyService.maybeShowSurveyPrompt(context);
   }
 
   @override
@@ -164,8 +180,8 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
     _tabController?.dispose();
     _tabController = TabController(length: widget.tabs.length, vsync: this);
 
-    if (widget.initialPage != null) {
-      final initialIndex = widget.tabs.indexWhere((screen) => screen.screenId == widget.initialPage);
+    if (widget.page != null) {
+      final initialIndex = widget.tabs.indexWhere((screen) => screen.screenId == widget.page);
       if (initialIndex != -1) {
         _tabController.index = initialIndex;
       }
@@ -180,23 +196,38 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
 
         // Send the page change info to the framework controller (it can then
         // send it on to the devtools server, if one is connected).
-        frameworkController.notifyPageChange(screen?.screenId);
+        frameworkController.notifyPageChange(
+          PageChangeEvent(screen?.screenId, widget.embed),
+        );
+
+        // If the tab index is 0 and the current route has no page ID (eg. we're
+        // at the URL /?uri= with no page ID), those are equivalent pages but
+        // navigateIfNotCurrent does not know that and will try to navigate, so
+        // skip that here.
+        final routerDelegate = DevToolsRouterDelegate.of(context);
+        if (_tabController.index == 0 && (routerDelegate.currentConfiguration.page?.isEmpty ?? true)) {
+          return;
+        }
+
+        // Update routing with the change.
+        routerDelegate.navigateIfNotCurrent(screen?.screenId);
       }
     });
 
     // Broadcast the initial page.
-    frameworkController.notifyPageChange(_currentScreen.value.screenId);
+    frameworkController.notifyPageChange(
+      PageChangeEvent(_currentScreen.value.screenId, widget.embed),
+    );
   }
 
   /// Connects to the VM with the given URI. This request usually comes from the
   /// IDE via the server API to reuse the DevTools window after being disconnected
   /// (for example if the user stops a debug session then launches a new one).
   void _connectVm(event) {
-    final routeName = routeNameWithQueryParams(context, '/', {
+    DevToolsRouterDelegate.of(context).updateArgsIfNotCurrent({
       'uri': event.serviceProtocolUri.toString(),
       if (event.notify) 'notify': 'true',
     });
-    Navigator.of(context).pushReplacementNamed(routeName);
   }
 
   /// Switch to the given page ID. This request usually comes from the server API
@@ -208,51 +239,25 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
     final newIndex = widget.tabs.indexWhere((screen) => screen.screenId == pageId);
 
     if (newIndex != -1 && newIndex != existingTabIndex) {
-      _tabController.animateTo(newIndex);
-      _pushScreenToLocalPageRoute(newIndex);
-    }
-  }
-
-  /// Pushes tab changes into the navigation history.
-  ///
-  /// Note that this currently works very well, but it doesn't integrate with
-  /// the browser's history yet.
-  void _pushScreenToLocalPageRoute(int newIndex) {
-    if (_tabController.indexIsChanging) {
-      final previousTabIndex = _tabController.previousIndex;
-      ModalRoute.of(context).addLocalHistoryEntry(LocalHistoryEntry(
-        onRemove: () {
-          if (widget.tabs.length >= previousTabIndex) {
-            _tabController.animateTo(previousTabIndex);
-          }
-        },
-      ));
+      DevToolsRouterDelegate.of(context).navigateIfNotCurrent(pageId);
     }
   }
 
   /// Pushes the snapshot screen for an offline import.
   void _pushSnapshotScreenForImport(String screenId) {
-    final args = SnapshotArguments(screenId);
-    if (offlineMode) {
-      // If we are already in offline mode, only handle routing from existing
-      // '/snapshot' route. In this case, we need to first pop the existing
-      // '/snapshot' route and push a new one.
-      //
-      // If we allow other routes that are not the '/snapshot' route to handle
-      // routing when we are already offline, the other routes will pop their
-      // existing screen ('/connect', or '/') and push '/snapshot' over the top.
-      // We want to avoid this because the routes underneath the existing
-      // '/snapshot' route should remain unchanged while '/snapshot' sits on
-      // top.
-      if (ModalRoute.of(context).settings.name == snapshotRoute) {
-        Navigator.popAndPushNamed(context, snapshotRoute, arguments: args);
-      }
-    } else {
-      Navigator.pushNamed(context, snapshotRoute, arguments: args);
-    }
-    setState(() {
+    final args = {'screen': screenId};
+    final routerDelegate = DevToolsRouterDelegate.of(context);
+    // If we are already in offline mode, we need to replace the existing page
+    // so clicking Back does not go through all of the old snapshots.
+    if (!offlineMode) {
       enterOfflineMode();
-    });
+      routerDelegate.navigate(snapshotPageId, args);
+    } else {
+      // Router.neglect will cause the router to ignore this change, so
+      // dragging a new export into the browser will not result in a new
+      // history entry.
+      Router.neglect(context, () => routerDelegate.navigate(snapshotPageId, args));
+    }
   }
 
   @override
@@ -262,18 +267,23 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
       for (var screen in widget.tabs)
         Container(
           // TODO(kenz): this padding creates a flash when dragging and dropping
-          // into the code size screen because it creates space that is outside
+          // into the app size screen because it creates space that is outside
           // of the [DragAndDropEventAbsorber] widget. Fix this.
           padding: DevToolsScaffold.appPadding,
           alignment: Alignment.topLeft,
           child: FocusScope(
-            child: BannerMessages(
-              screen: screen,
+            child: AnalyticsPrompt(
+              provider: widget.analyticsProvider,
+              child: BannerMessages(
+                screen: screen,
+              ),
             ),
           ),
         ),
     ];
 
+    // TODO(issues/2547) - Remove.
+    // ignore: deprecated_member_use
     return ValueListenableProvider.value(
       value: _currentScreen,
       child: Provider<BannerMessagesController>(
@@ -296,7 +306,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
 
   /// Builds an [AppBar] with the [TabBar] placed on the side or the bottom,
   /// depending on the screen width.
-  Widget _buildAppBar() {
+  PreferredSizeWidget _buildAppBar() {
     const title = Text('Dart DevTools');
 
     Widget flexibleSpace;
@@ -313,13 +323,12 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
       tabBar = TabBar(
         controller: _tabController,
         isScrollable: true,
-        onTap: _pushScreenToLocalPageRoute,
         tabs: [for (var screen in widget.tabs) screen.buildTab(context)],
       );
-      preferredSize = isNarrow ? const Size.fromHeight(kToolbarHeight) : const Size.fromHeight(kToolbarHeight - 10.0);
+      preferredSize = isNarrow ? const Size.fromHeight(kToolbarHeight + 40.0) : const Size.fromHeight(kToolbarHeight);
       final alignment = isNarrow ? Alignment.bottomLeft : Alignment.centerRight;
 
-      final rightAdjust = isNarrow ? 0.0 : DevToolsScaffold.actionWidgetSize / 2;
+      final rightAdjust = isNarrow ? 0.0 : DevToolsScaffold.actionWidgetSize;
       final rightPadding =
           isNarrow ? 0.0 : math.max(0.0, DevToolsScaffold.actionWidgetSize * (actions?.length ?? 0.0) - rightAdjust);
 
@@ -335,8 +344,13 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
       );
     }
 
-    final appBar =
-        PreferredSize(preferredSize: const Size(1300, 0), child: Container(height: 0.0, color: Colors.black));
+    final appBar = AppBar(
+      // Turn off the appbar's back button.
+      automaticallyImplyLeading: false,
+      title: title,
+      actions: actions,
+      flexibleSpace: flexibleSpace,
+    );
 
     if (flexibleSpace == null) return appBar;
 
@@ -356,7 +370,7 @@ class DevToolsScaffoldState extends State<DevToolsScaffold> with TickerProviderS
     const appPadding = DevToolsScaffold.appPadding;
 
     return Container(
-      height: 42.0,
+      height: 48.0,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

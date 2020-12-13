@@ -2,10 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-import 'dart:math';
-
 import 'package:flutter/material.dart';
-import 'package:mp_chart/mp/core/adapter_android_mp.dart';
 
 import 'common_widgets.dart';
 import 'config_specific/ide_theme/ide_theme.dart';
@@ -29,6 +26,10 @@ ThemeData themeFor({
 
 ThemeData _darkTheme(IdeTheme ideTheme) {
   final theme = ThemeData.dark();
+  final background = isValidDarkColor(ideTheme?.backgroundColor)
+      ? ideTheme?.backgroundColor
+      : theme.canvasColor;
+
   return theme.copyWith(
     primaryColor: devtoolsGrey[900],
     primaryColorDark: devtoolsBlue[700],
@@ -36,17 +37,20 @@ ThemeData _darkTheme(IdeTheme ideTheme) {
     indicatorColor: devtoolsBlue[400],
     accentColor: devtoolsBlue[400],
     backgroundColor: devtoolsGrey[600],
+    canvasColor: background,
     toggleableActiveColor: devtoolsBlue[400],
     selectedRowColor: devtoolsGrey[600],
     buttonTheme: theme.buttonTheme.copyWith(minWidth: buttonMinWidth),
-    scaffoldBackgroundColor: isValidDarkColor(ideTheme?.backgroundColor)
-        ? ideTheme?.backgroundColor
-        : null,
+    scaffoldBackgroundColor: background,
+    colorScheme: theme.colorScheme.copyWith(background: background),
   );
 }
 
 ThemeData _lightTheme(IdeTheme ideTheme) {
   final theme = ThemeData.light();
+  final background = isValidLightColor(ideTheme?.backgroundColor)
+      ? ideTheme?.backgroundColor
+      : theme.canvasColor;
   return theme.copyWith(
     primaryColor: devtoolsBlue[600],
     primaryColorDark: devtoolsBlue[700],
@@ -54,33 +58,38 @@ ThemeData _lightTheme(IdeTheme ideTheme) {
     indicatorColor: Colors.yellowAccent[400],
     accentColor: devtoolsBlue[400],
     backgroundColor: devtoolsGrey[600],
+    canvasColor: background,
     toggleableActiveColor: devtoolsBlue[400],
     selectedRowColor: devtoolsBlue[600],
     buttonTheme: theme.buttonTheme.copyWith(minWidth: buttonMinWidth),
-    scaffoldBackgroundColor: isValidLightColor(ideTheme?.backgroundColor)
-        ? ideTheme?.backgroundColor
-        : null,
+    scaffoldBackgroundColor: background,
+    colorScheme: theme.colorScheme.copyWith(background: background),
   );
 }
+
+/// Threshold used to determine whether a colour is light/dark enough for us to
+/// override the default DevTools themes with.
+///
+/// A value of 0.5 would result in all colours being considered light/dark, and
+/// a value of 0.1 allowing around only the 10% darkest/lightest colours by
+/// Flutter's luminance calculation.
+const _lightDarkLuminanceThreshold = 0.1;
 
 bool isValidDarkColor(Color color) {
   if (color == null) {
     return false;
   }
-  // TODO(dantup): Pick good threshold
-  final components = [color.red, color.green, color.blue];
-  return components.reduce(max) < 50;
+  return color.computeLuminance() <= _lightDarkLuminanceThreshold;
 }
 
 bool isValidLightColor(Color color) {
   if (color == null) {
     return false;
   }
-  // TODO(dantup): Pick good threshold
-  final components = [color.red, color.green, color.blue];
-  return components.reduce(min) > 205;
+  return color.computeLuminance() >= 1 - _lightDarkLuminanceThreshold;
 }
 
+const defaultButtonHeight = 36.0;
 const buttonMinWidth = 36.0;
 
 const defaultIconSize = 16.0;
@@ -98,7 +107,7 @@ const smallProgressSize = 12.0;
 
 const defaultListItemHeight = 28.0;
 
-const defaultChartHeight = 140.0;
+const defaultChartHeight = 150.0;
 
 const defaultTabBarViewPhysics = NeverScrollableScrollPhysics();
 
@@ -144,6 +153,10 @@ extension DevToolsColorScheme on ColorScheme {
   Color get chartTextColor => isLight ? Colors.black : Colors.white;
   Color get chartSubtleColor =>
       isLight ? const Color(0xFF999999) : const Color(0xFF8A8A8A);
+  Color get toggleButtonBackgroundColor =>
+      isLight ? const Color(0xFFE0EEFA) : const Color(0xFF2E3C48);
+  // [toggleButtonForegroundColor] is the same for light and dark theme.
+  Color get toggleButtonForegroundColor => const Color(0xFF2196F3);
 }
 
 TextStyle linkTextStyle(ColorScheme colorScheme) => TextStyle(
@@ -153,7 +166,7 @@ TextStyle linkTextStyle(ColorScheme colorScheme) => TextStyle(
 
 const wideSearchTextWidth = 400.0;
 const defaultSearchTextWidth = 200.0;
-const defaultSearchTextHeight = 36.0;
+const defaultTextFieldHeight = 36.0;
 
 /// A short duration to use for animations.
 ///
@@ -206,6 +219,9 @@ AnimationController longAnimationController(
 }
 
 /// The default curve we use for animations.
+///
+/// Inspector animations benefit from a symmetric animation curve which makes
+/// it easier to reverse animations.
 const defaultCurve = Curves.easeInOutCubic;
 
 /// Builds a [CurvedAnimation] with [defaultCurve].
@@ -215,20 +231,10 @@ CurvedAnimation defaultCurvedAnimation(AnimationController parent) =>
     CurvedAnimation(curve: defaultCurve, parent: parent);
 
 Color titleSolidBackgroundColor(ThemeData theme) {
-  return theme.isDarkTheme ? devtoolsGrey[900] : devtoolsGrey[50];
+  return theme.canvasColor.darken(0.2);
 }
 
 const chartFontSizeSmall = 12.0;
-
-final chartLightTypeFace = TypeFace(
-  fontFamily: 'OpenSans',
-  fontWeight: FontWeight.w100,
-);
-
-final chartBoldTypeFace = TypeFace(
-  fontFamily: 'OpenSans',
-  fontWeight: FontWeight.w800,
-);
 
 const lightSelection = Color(0xFFD4D7DA);
 

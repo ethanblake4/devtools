@@ -21,6 +21,7 @@ import 'package:vm_service/vm_service.dart' hide Isolate;
 
 import 'client_manager.dart';
 import 'external_handlers.dart';
+import 'file_system.dart';
 import 'memory_profile.dart';
 import 'usage.dart';
 
@@ -29,132 +30,99 @@ const argHelp = 'help';
 const argVmUri = 'vm-uri';
 const argEnableNotifications = 'enable-notifications';
 const argAllowEmbedding = 'allow-embedding';
+const argAppSizeBase = 'appSizeBase';
+const argAppSizeTest = 'appSizeTest';
 const argHeadlessMode = 'headless';
 const argDebugMode = 'debug';
 const argLaunchBrowser = 'launch-browser';
 const argMachine = 'machine';
 const argHost = 'host';
 const argPort = 'port';
-const argProfileMemory = 'profile-memory';
+const argProfileMemory = 'record-memory-profile';
+const argProfileMemoryOld = 'profile-memory';
 const argTryPorts = 'try-ports';
 const argVerbose = 'verbose';
 const launchDevToolsService = 'launchDevTools';
+
+const defaultTryPorts = 10;
 
 const errorLaunchingBrowserCode = 500;
 
 ClientManager clients;
 
-final argParser = ArgParser()
-  ..addFlag(
-    argHelp,
-    negatable: false,
-    abbr: 'h',
-    help: 'Prints help output.',
-  )
-  ..addOption(
-    argHost,
-    defaultsTo: 'localhost',
-    help: 'Hostname to serve DevTools on.',
-  )
-  ..addOption(
-    argPort,
-    defaultsTo: '9100',
-    abbr: 'p',
-    help: 'Port to serve DevTools on. '
-        'Pass 0 to automatically assign an available port.',
-  )
-  ..addOption(
-    argTryPorts,
-    defaultsTo: '1',
-    help:
-        'The number of ascending ports to try binding to before failing with an error. ',
-  )
-  ..addOption(
-    argVmUri,
-    defaultsTo: '',
-    help: 'VM Authentication URI',
-  )
-  ..addOption(
-    argProfileMemory,
-    defaultsTo: '',
-    help: 'Enable memory profiling e.g.,\n'
-        '--profile-memory /usr/local/home/my_name/profiles/memory_samples.json\n'
-        'writes collected memory statistics to the file specified.',
-  )
-  ..addFlag(
-    argMachine,
-    negatable: false,
-    abbr: 'm',
-    help: 'Sets output format to JSON for consumption in tools.',
-  )
-  ..addFlag(
-    argLaunchBrowser,
-    negatable: false,
-    abbr: 'b',
-    help: 'Launches DevTools in a browser immediately at start.',
-  )
-  ..addFlag(
-    argEnableNotifications,
-    hide: true,
-    negatable: false,
-    help:
-        'Requests notification permissions immediately when a client connects back to the server.',
-  )
-  ..addFlag(
-    argAllowEmbedding,
-    hide: true,
-    negatable: false,
-    help: 'Allow embedding DevTools inside an iframe.',
-  )
-  ..addFlag(
-    argHeadlessMode,
-    hide: true,
-    negatable: false,
-    help:
-        'Causes the server to spawn Chrome in headless mode for use in automated testing.',
-  )
-  ..addFlag(
-    argDebugMode,
-    hide: true,
-    negatable: false,
-    help: 'Run a debug build of the DevTools web frontend.',
-  )
-  ..addFlag(
-    argVerbose,
-    hide: true,
-    negatable: false,
-    abbr: 'v',
-    help: 'Output more informational messages.',
-  );
-
 /// Wraps [serveDevTools] `arguments` parsed, as from the command line.
 ///
 /// For more information on `handler`, see [serveDevTools].
-Future<HttpServer> serveDevToolsWithArgs(
+// Note: this method is used in google3 as well as by DevTools' main method.
+Future<void> serveDevToolsWithArgs(
   List<String> arguments, {
   shelf.Handler handler,
 }) async {
-  final args = argParser.parse(arguments);
+  ArgResults args;
+  final verbose = arguments.contains('-v') || arguments.contains('--verbose');
+  try {
+    args = _createArgsParser(verbose).parse(arguments);
+  } on FormatException catch (e) {
+    print(e.message);
+    print('');
+    _printUsage(verbose);
+    return;
+  }
 
+  return await _serveDevToolsWithArgs(args, verbose, handler: handler);
+}
+
+Future<void> _serveDevToolsWithArgs(
+  ArgResults args,
+  bool verbose, {
+  shelf.Handler handler,
+}) async {
   final help = args[argHelp];
   final bool machineMode = args[argMachine];
-  final bool launchBrowser = args[argLaunchBrowser];
+  // launchBrowser defaults based on machine-mode if not explicitly supplied.
+  final bool launchBrowser =
+      args.wasParsed(argLaunchBrowser) ? args[argLaunchBrowser] : !machineMode;
   final bool enableNotifications = args[argEnableNotifications];
   final bool allowEmbedding = args[argAllowEmbedding];
   final port = args[argPort] != null ? int.tryParse(args[argPort]) ?? 0 : 0;
   final bool headlessMode = args[argHeadlessMode];
   final bool debugMode = args[argDebugMode];
-  final numPortsToTry =
-      args[argTryPorts] != null ? int.tryParse(args[argTryPorts]) ?? 1 : 1;
+  final numPortsToTry = args[argTryPorts] != null
+      ? int.tryParse(args[argTryPorts]) ?? defaultTryPorts
+      : defaultTryPorts;
   final bool verboseMode = args[argVerbose];
   final String hostname = args[argHost];
+  final String appSizeBase = args[argAppSizeBase];
+  final String appSizeTest = args[argAppSizeTest];
+
+  if (help) {
+    print('Dart DevTools version ${await _getVersion()}');
+    print('');
+    _printUsage(verbose);
+    return;
+  }
+
+  // Prefer getting the VM URI from the rest args; fall back on the 'vm-url'
+  // option otherwise.
+  String serviceProtocolUri;
+  if (args.rest.isNotEmpty) {
+    serviceProtocolUri = args.rest.first;
+  } else if (args.wasParsed(argVmUri)) {
+    serviceProtocolUri = args[argVmUri];
+  }
 
   // Support collecting profile data.
-  final String vmUri = args[argVmUri];
-  final String profileAbsoluteFilename = args[argProfileMemory];
+  String profileFilename;
+  if (args.wasParsed(argProfileMemory)) {
+    profileFilename = args[argProfileMemory];
+  } else if (args.wasParsed(argProfileMemoryOld)) {
+    profileFilename = args[argProfileMemoryOld];
+  }
+  if (profileFilename != null && !path.isAbsolute(profileFilename)) {
+    profileFilename = path.absolute(profileFilename);
+  }
 
   return serveDevTools(
-    help: help,
     machineMode: machineMode,
     debugMode: debugMode,
     launchBrowser: launchBrowser,
@@ -164,20 +132,21 @@ Future<HttpServer> serveDevToolsWithArgs(
     headlessMode: headlessMode,
     numPortsToTry: numPortsToTry,
     handler: handler,
-    serviceProtocolUri: vmUri,
-    profileFilename: profileAbsoluteFilename,
+    serviceProtocolUri: serviceProtocolUri,
+    profileFilename: profileFilename,
     verboseMode: verboseMode,
     hostname: hostname,
+    appSizeBase: appSizeBase,
+    appSizeTest: appSizeTest,
   );
 }
 
 /// Serves DevTools.
 ///
 /// `handler` is the [shelf.Handler] that the server will use for all requests.
-/// If null, [defaultHandler] will be used.
-/// Defaults to null.
+/// If null, [defaultHandler] will be used. Defaults to null.
+// Note: this method is used by the Flutter CLI and by package:dwds.
 Future<HttpServer> serveDevTools({
-  bool help = false,
   bool enableStdinCommands = true,
   bool machineMode = false,
   bool debugMode = false,
@@ -186,24 +155,19 @@ Future<HttpServer> serveDevTools({
   bool allowEmbedding = false,
   bool headlessMode = false,
   bool verboseMode = false,
-  String hostname = 'localhost',
+  String hostname,
   int port = 0,
-  int numPortsToTry = 1,
+  int numPortsToTry = defaultTryPorts,
   shelf.Handler handler,
-  String serviceProtocolUri = '',
-  String profileFilename = '',
+  String serviceProtocolUri,
+  String profileFilename,
+  String appSizeBase,
+  String appSizeTest,
 }) async {
-  if (help) {
-    print('Dart DevTools version ${await _getVersion()}');
-    print('');
-    print('usage: devtools <options>');
-    print('');
-    print(argParser.usage);
-    return null;
-  }
+  hostname ??= 'localhost';
 
-  // Collect profiling information
-  if (serviceProtocolUri.isNotEmpty && profileFilename.isNotEmpty) {
+  // Collect profiling information.
+  if (profileFilename != null && serviceProtocolUri != null) {
     final observatoryUri = Uri.tryParse(serviceProtocolUri);
     await _hookupMemoryProfiling(observatoryUri, profileFilename, verboseMode);
     return null;
@@ -238,6 +202,7 @@ Future<HttpServer> serveDevTools({
   if (allowEmbedding) {
     server.defaultResponseHeaders.remove('x-frame-options', 'SAMEORIGIN');
   }
+
   // Ensure browsers don't cache older versions of the app.
   server.defaultResponseHeaders
       .add(HttpHeaders.cacheControlHeader, 'max-age=900');
@@ -246,11 +211,45 @@ Future<HttpServer> serveDevTools({
   final devToolsUrl = 'http://${server.address.host}:${server.port}';
 
   if (launchBrowser) {
-    await Chrome.start([devToolsUrl.toString()]);
+    if (serviceProtocolUri != null) {
+      serviceProtocolUri =
+          _normalizeVmServiceUri(serviceProtocolUri).toString();
+    }
+
+    final queryParameters = {
+      if (serviceProtocolUri != null) 'uri': serviceProtocolUri,
+      if (appSizeBase != null) 'appSizeBase': appSizeBase,
+      if (appSizeTest != null) 'appSizeTest': appSizeTest,
+    };
+    String url = Uri.parse(devToolsUrl)
+        .replace(queryParameters: queryParameters)
+        .toString();
+
+    // If app size parameters are present, open to the standalone `appsize`
+    // page, regardless if there is a vm service uri specified. We only check
+    // for the presence of [appSizeBase] here because [appSizeTest] may or may
+    // not be specified (it should only be present for diffs). If [appSizeTest]
+    // is present without [appSizeBase], we will ignore the parameter.
+    if (appSizeBase != null) {
+      final startQueryParamIndex = url.indexOf('?');
+      if (startQueryParamIndex != -1) {
+        url = '${url.substring(0, startQueryParamIndex)}'
+            '/#/appsize'
+            '${url.substring(startQueryParamIndex)}';
+      }
+    }
+
+    try {
+      await Chrome.start([url]);
+    } catch (e) {
+      print('Unable to launch Chrome: $e\n');
+    }
   }
 
   if (enableStdinCommands) {
-    String message = 'Serving DevTools at $devToolsUrl';
+    String message = 'Serving DevTools at $devToolsUrl.\n'
+        '\n'
+        'Hit ctrl-c to terminate the server.';
     if (!machineMode && debugMode) {
       // Add bold to help find the correct url to open.
       message = '\u001b[1m$message\u001b[0m\n';
@@ -274,6 +273,7 @@ Future<HttpServer> serveDevTools({
       machineMode: machineMode,
     );
 
+    // TODO: Refactor machine mode out into a separate class.
     if (machineMode) {
       final Stream<Map<String, dynamic>> _stdinCommandStream = stdin
           .transform<String>(utf8.decoder)
@@ -458,6 +458,133 @@ Future<HttpServer> serveDevTools({
   return server;
 }
 
+ArgParser _createArgsParser(bool verbose) {
+  final parser = ArgParser();
+
+  parser
+    ..addFlag(
+      argHelp,
+      negatable: false,
+      abbr: 'h',
+      help: 'Prints help output.',
+    )
+    ..addFlag(
+      argVerbose,
+      negatable: false,
+      abbr: 'v',
+      help: 'Output more informational messages.',
+    )
+    ..addOption(
+      argHost,
+      //defaultsTo: 'localhost',
+      valueHelp: 'host',
+      help: 'Hostname to serve DevTools on (defaults to localhost).',
+    )
+    ..addOption(
+      argPort,
+      defaultsTo: '9100',
+      valueHelp: 'port',
+      help: 'Port to serve DevTools on; specify 0 to automatically use any '
+          'available port.',
+    )
+    ..addFlag(
+      argLaunchBrowser,
+      help:
+          'Launches DevTools in a browser immediately at start.\n(defaults to on unless in --machine mode)',
+    )
+// TODO: Remove this - prefer that clients use the rest arg.
+    ..addOption(
+      argVmUri,
+      defaultsTo: '',
+      help: 'VM Service protocol URI.',
+      hide: true,
+    )
+    ..addFlag(
+      argMachine,
+      negatable: false,
+      help: 'Sets output format to JSON for consumption in tools.',
+    )
+    ..addOption(
+      argProfileMemory,
+      valueHelp: 'file',
+      defaultsTo: 'memory_samples.json',
+      help:
+          'Start devtools headlessly and write memory profiling samples to the '
+          'indicated file.',
+    )
+// TODO: Remove this after a release or two.
+    ..addOption(
+      argProfileMemoryOld,
+      defaultsTo: 'memory_samples.json',
+      hide: true,
+    )
+    ..addOption(
+      argAppSizeBase,
+      valueHelp: 'appSizeBase',
+      help: 'Path to the base app size file used for app size debugging.',
+      hide: true,
+    )
+    ..addOption(
+      argAppSizeTest,
+      valueHelp: 'appSizeTest',
+      help: 'Path to the test app size file used for app size debugging. This '
+          'file should only be specified if a base app size file (appSizeBase) '
+          'is also specified.',
+      hide: true,
+    );
+
+  // Args to show for verbose mode.
+  parser
+    ..addOption(
+      argTryPorts,
+      defaultsTo: defaultTryPorts.toString(),
+      valueHelp: 'count',
+      help: 'The number of ascending ports to try binding to before failing '
+          'with an error. ',
+      hide: !verbose,
+    )
+    ..addFlag(
+      argEnableNotifications,
+      negatable: false,
+      help: 'Requests notification permissions immediately when a client '
+          'connects back to the server.',
+      hide: !verbose,
+    )
+    ..addFlag(
+      argAllowEmbedding,
+      negatable: false,
+      help: 'Allow embedding DevTools inside an iframe.',
+      hide: !verbose,
+    )
+    ..addFlag(
+      argHeadlessMode,
+      negatable: false,
+      help: 'Causes the server to spawn Chrome in headless mode for use in '
+          'automated testing.',
+      hide: !verbose,
+    );
+
+  // Hidden args.
+  parser
+    ..addFlag(
+      argDebugMode,
+      negatable: false,
+      help: 'Run a debug build of the DevTools web frontend.',
+      hide: true,
+    );
+
+  return parser;
+}
+
+void _printUsage(bool verbose) {
+  print('usage: devtools <options> [service protocol uri]');
+  print('');
+  print('Open a DevTools instance in a browser and optionally connect to an '
+      'existing application.');
+  print('');
+  print(_createArgsParser(verbose).usage);
+}
+
 // Only used for testing DevToolsUsage (used by survey).
 DevToolsUsage _devToolsUsage;
 
@@ -465,10 +592,10 @@ File _devToolsBackup;
 
 bool backupAndCreateDevToolsStore() {
   assert(_devToolsBackup == null);
-  final devToolsStore = File('${DevToolsUsage.userHomeDir()}/.devtools');
+  final devToolsStore = File(_devToolsStoreLocation());
   if (devToolsStore.existsSync()) {
     _devToolsBackup = devToolsStore
-        .copySync('${DevToolsUsage.userHomeDir()}/.devtools_backup_test');
+        .copySync('${LocalFileSystem.devToolsDir()}/.devtools_backup_test');
     devToolsStore.deleteSync();
   }
 
@@ -478,14 +605,16 @@ bool backupAndCreateDevToolsStore() {
 String restoreDevToolsStore() {
   if (_devToolsBackup != null) {
     // Read the current ~/.devtools file
-    final devToolsStore = File('${DevToolsUsage.userHomeDir()}/.devtools');
+    LocalFileSystem.maybeMoveLegacyDevToolsStore();
+    final devToolsStore = File(_devToolsStoreLocation());
     final content = devToolsStore.readAsStringSync();
 
     // Delete the temporary ~/.devtools file
     devToolsStore.deleteSync();
     if (_devToolsBackup.existsSync()) {
-      // Restore the backup ~/.devtools file we created in backupAndCreateDevToolsStore.
-      _devToolsBackup.copySync('${DevToolsUsage.userHomeDir()}/.devtools');
+      // Restore the backup ~/.devtools file we created in
+      // backupAndCreateDevToolsStore.
+      _devToolsBackup.copySync(_devToolsStoreLocation());
       _devToolsBackup.deleteSync();
       _devToolsBackup = null;
     }
@@ -495,14 +624,24 @@ String restoreDevToolsStore() {
   return null;
 }
 
-Future<void> _hookupMemoryProfiling(Uri observatoryUri, String profileFile,
-    [bool verboseMode = false]) async {
+String _devToolsStoreLocation() {
+  return path.join(LocalFileSystem.devToolsDir(), DevToolsUsage.storeName);
+}
+
+Future<void> _hookupMemoryProfiling(
+  Uri observatoryUri,
+  String profileFile, [
+  bool verboseMode = false,
+]) async {
   final VmService service = await _connectToVmService(observatoryUri);
-  if (service == null) return;
+  if (service == null) {
+    return;
+  }
 
-  MemoryProfile(service, profileFile, verboseMode);
+  final memoryProfiler = MemoryProfile(service, profileFile, verboseMode);
+  memoryProfiler.startPolling();
 
-  print('Recording memory profile samples to $profileFile');
+  print('Writing memory profile samples to $profileFile...');
 }
 
 Future<void> _handleVmRegister(
@@ -596,10 +735,10 @@ Future<void> _handleClientsList(
     dynamic id, Map<String, dynamic> params, bool machineMode) async {
   final connectedClients = clients.allClients;
   printOutput(
-    connectedClients
-        .map((c) =>
-            '${c.hasConnection.toString().padRight(5, ' ')} ${c.currentPage?.padRight(12, ' ')} ${c.vmServiceUri.toString()}')
-        .join('\n'),
+    connectedClients.map((c) {
+      return '${c.hasConnection.toString().padRight(5, ' ')} '
+          '${c.currentPage?.padRight(12, ' ')} ${c.vmServiceUri.toString()}';
+    }).join('\n'),
     {
       'id': id,
       'result': {
@@ -607,6 +746,7 @@ Future<void> _handleClientsList(
             .map((c) => {
                   'hasConnection': c.hasConnection,
                   'currentPage': c.currentPage,
+                  'embedded': c.embedded,
                   'vmServiceUri': c.vmServiceUri?.toString(),
                 })
             .toList()
@@ -623,7 +763,8 @@ Future<bool> _tryReuseExistingDevToolsInstance(
 ) async {
   // First try to find a client that's already connected to this VM service,
   // and just send the user a notification for that one.
-  final existingClient = clients.findExistingConnectedClient(vmServiceUri);
+  final existingClient =
+      clients.findExistingConnectedReusableClient(vmServiceUri);
   if (existingClient != null) {
     try {
       await existingClient.showPage(page);
@@ -758,10 +899,9 @@ Future<Map<String, dynamic>> launchDevTools(
   final devToolsUri = Uri.parse(devToolsUrl);
   final uriToLaunch = _buildUriToLaunch(uriParams, page, devToolsUri);
 
-  // TODO(dantup): When ChromeOS has support for tunneling all ports we
-  // can change this to always use the native browser for ChromeOS
-  // and may wish to handle this inside `browser_launcher`.
-  //   https://crbug.com/848063
+  // TODO(dantup): When ChromeOS has support for tunneling all ports we can
+  // change this to always use the native browser for ChromeOS and may wish to
+  // handle this inside `browser_launcher`; https://crbug.com/848063.
   final useNativeBrowser = _isChromeOS &&
       _isAccessibleToChromeOSNativeBrowser(Uri.parse(devToolsUrl)) &&
       _isAccessibleToChromeOSNativeBrowser(vmServiceUri);
@@ -901,4 +1041,22 @@ void printOutput(
   if (output != null) {
     print(output);
   }
+}
+
+// Note: please keep this copy of normalizeVmServiceUri() in sync with the one
+// in devtools_app.
+Uri _normalizeVmServiceUri(String value) {
+  value = value.trim();
+
+  // Cleanup encoded urls likely copied from the uri of an existing running
+  // DevTools app.
+  if (value.contains('%3A%2F%2F')) {
+    value = Uri.decodeFull(value);
+  }
+  final uri = Uri.parse(value.trim()).removeFragment();
+  if (!uri.isAbsolute) {
+    return null;
+  }
+  if (uri.path.endsWith('/')) return uri;
+  return uri.replace(path: uri.path);
 }

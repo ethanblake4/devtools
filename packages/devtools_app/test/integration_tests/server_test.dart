@@ -16,6 +16,7 @@ import 'package:vm_service/vm_service.dart';
 import '../support/chrome.dart';
 import '../support/cli_test_driver.dart';
 import '../support/devtools_server_driver.dart';
+import '../support/utils.dart';
 import 'integration.dart';
 
 CliAppFixture appFixture;
@@ -23,7 +24,13 @@ DevToolsServerDriver server;
 final Map<String, Completer<Map<String, dynamic>>> completers = {};
 final StreamController<Map<String, dynamic>> eventController =
     StreamController.broadcast();
+
+/// A broadcast stream of events from the server.
+///
+/// Listening for "server.started" events on this stream may be unreliable because
+/// it may have occurred before the test starts. Use `serverStartedEvent` instead.
 Stream<Map<String, dynamic>> get events => eventController.stream;
+Future<Map<String, dynamic>> serverStartedEvent;
 final Map<String, String> registeredServices = {};
 // A list of PIDs for Chrome instances spawned by tests that should be
 // cleaned up.
@@ -39,7 +46,7 @@ void main() {
       Directory('build').deleteSync(recursive: true);
     }
     // Build the app, as the server can't start without the build output.
-    await WebdevFixture.build(verbose: true);
+    await WebBuildFixture.build(verbose: true);
 
     // The devtools package build directory needs to reflect the latest
     // devtools_app package contents.
@@ -69,6 +76,8 @@ void main() {
         eventController.add(map);
       }
     });
+    serverStartedEvent =
+        events.firstWhere((map) => map['event'] == 'server.started');
 
     await _startApp();
   });
@@ -304,8 +313,7 @@ void main() {
       }, timeout: const Timeout.factor(10));
 
       test('server removes clients that disconnect from the API', () async {
-        final event =
-            await events.firstWhere((map) => map['event'] == 'server.started');
+        final event = await serverStartedEvent;
 
         // Spawn our own Chrome process so we can terminate it.
         final devToolsUri =
@@ -348,6 +356,40 @@ void main() {
         final serverResponse =
             await _waitForClients(requiredConnectionState: true);
         expect(serverResponse['clients'], hasLength(1));
+      }, timeout: const Timeout.factor(10));
+
+      test('Server does not reuses DevTools instance if embedded', () async {
+        // Register the VM.
+        await _send('vm.register', {'uri': appFixture.serviceUri.toString()});
+
+        // Spawn an embedded version of DevTools in a browser.
+        final event = await serverStartedEvent;
+        final devToolsUri =
+            'http://${event['params']['host']}:${event['params']['port']}';
+        final launchUrl = '$devToolsUri/?embed=true&page=logging'
+            '&uri=${Uri.encodeQueryComponent(appFixture.serviceUri.toString())}';
+        final chrome = await Chrome.locate().start(url: launchUrl);
+        try {
+          {
+            final serverResponse =
+                await _waitForClients(requiredConnectionState: true);
+            expect(serverResponse['clients'], hasLength(1));
+          }
+
+          // Send a request to the server to launch and ensure it did
+          // not reuse the existing connection. Launch it on a different page
+          // so we can easily tell once this one has connected.
+          final launchResponse = await _sendLaunchDevToolsRequest(
+              useVmService: useVmService, reuseWindows: true, page: 'memory');
+          expect(launchResponse['reused'], isFalse);
+
+          // Ensure there's now two connections.
+          final serverResponse = await _waitForClients(
+              requiredConnectionState: true, requiredPage: 'memory');
+          expect(serverResponse['clients'], hasLength(2));
+        } finally {
+          chrome?.kill();
+        }
       }, timeout: const Timeout.factor(10));
 
       test('Server reuses DevTools instance if not connected to a VM',
@@ -465,11 +507,18 @@ Future<Map<String, dynamic>> _waitForClients({
   }
 
   final isOnPage = (client) => client['currentPage'] == requiredPage;
-  final hasConnectionState =
-      (client) => client['hasConnection'] == requiredConnectionState;
+  final hasConnectionState = (client) => requiredConnectionState
+      // If we require a connected client, also require a non-null page. This
+      // avoids a race in tests where we may proceed to send messages to a client
+      // that is not fully initialised.
+      ? (client['hasConnection'] && client['currentPage'] != null)
+      : !client['hasConnection'];
 
   await waitFor(
     () async {
+      // Await a short delay to give the client time to connect.
+      await delay();
+
       serverResponse = await _send('client.list');
       final clients = serverResponse['clients'];
       return clients is List &&

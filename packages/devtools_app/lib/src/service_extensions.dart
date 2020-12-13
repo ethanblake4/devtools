@@ -7,14 +7,15 @@ library service_extensions;
 import 'package:flutter/material.dart';
 import 'package:meta/meta.dart';
 
-import 'ui/analytics_constants.dart' as ga;
+import 'analytics/constants.dart' as ga;
+import 'theme.dart';
 import 'ui/icons.dart';
 
 // Each service extension needs to be added to [_extensionDescriptions].
 class ToggleableServiceExtensionDescription<T>
     extends ServiceExtensionDescription {
   ToggleableServiceExtensionDescription._({
-    Image icon,
+    Widget icon,
     @required String extension,
     @required String description,
     @required T enabledValue,
@@ -23,6 +24,7 @@ class ToggleableServiceExtensionDescription<T>
     @required String disabledTooltip,
     @required String gaScreenName,
     @required String gaItem,
+    bool shouldCallOnAllIsolates = false,
   }) : super(
           extension: extension,
           description: description,
@@ -31,6 +33,7 @@ class ToggleableServiceExtensionDescription<T>
           tooltips: [enabledTooltip, disabledTooltip],
           gaScreenName: gaScreenName,
           gaItem: gaItem,
+          shouldCallOnAllIsolates: shouldCallOnAllIsolates,
         );
 
   static const enabledValueIndex = 0;
@@ -56,6 +59,7 @@ class ServiceExtensionDescription<T> {
     @required this.tooltips,
     @required this.gaScreenName,
     @required this.gaItem,
+    this.shouldCallOnAllIsolates = false,
   }) : displayValues =
             displayValues ?? values.map((v) => v.toString()).toList();
 
@@ -63,7 +67,7 @@ class ServiceExtensionDescription<T> {
 
   final String description;
 
-  final Image icon;
+  final Widget icon;
 
   final List<T> values;
 
@@ -74,6 +78,8 @@ class ServiceExtensionDescription<T> {
   final String gaScreenName; // Analytics screen (screen name where item lives).
 
   final String gaItem; // Analytics item name (toggleable item's name).
+
+  final bool shouldCallOnAllIsolates;
 }
 
 final debugAllowBanner = ToggleableServiceExtensionDescription<bool>._(
@@ -84,6 +90,18 @@ final debugAllowBanner = ToggleableServiceExtensionDescription<bool>._(
   disabledValue: false,
   enabledTooltip: 'Hide Debug Banner',
   disabledTooltip: 'Show Debug Banner',
+  gaScreenName: ga.inspector,
+  gaItem: ga.debugBanner,
+);
+
+final invertOversizedImages = ToggleableServiceExtensionDescription<bool>._(
+  extension: 'ext.flutter.invertOversizedImages',
+  description: 'Invert Oversized Images',
+  icon: const Icon(Icons.image, size: actionsIconSize),
+  enabledValue: true,
+  disabledValue: false,
+  enabledTooltip: 'Disable Invert Oversized Images',
+  disabledTooltip: 'Enable Invert Oversized Images',
   gaScreenName: ga.inspector,
   gaItem: ga.debugBanner,
 );
@@ -177,6 +195,30 @@ final togglePlatformMode = ServiceExtensionDescription<String>(
   gaItem: ga.togglePlatform,
 );
 
+final httpEnableTimelineLogging = ToggleableServiceExtensionDescription<bool>._(
+  extension: 'ext.dart.io.httpEnableTimelineLogging',
+  description: 'Whether HTTP timeline logging is enabled',
+  enabledValue: true,
+  disabledValue: false,
+  enabledTooltip: 'HTTP timeline logging enabled',
+  disabledTooltip: 'HTTP timeline logging disabled',
+  gaScreenName: null,
+  gaItem: null,
+  shouldCallOnAllIsolates: true,
+);
+
+final socketProfiling = ToggleableServiceExtensionDescription<bool>._(
+  extension: 'ext.dart.io.socketProfilingEnabled',
+  description: 'Whether socket profiling is enabled',
+  enabledValue: true,
+  disabledValue: false,
+  enabledTooltip: 'Socket profiling enabled',
+  disabledTooltip: 'Socket profiling disabled',
+  gaScreenName: null,
+  gaItem: null,
+  shouldCallOnAllIsolates: true,
+);
+
 // Legacy extension to show the inspector and enable inspector select mode.
 final toggleOnDeviceWidgetInspector =
     ToggleableServiceExtensionDescription<bool>._(
@@ -254,6 +296,9 @@ final List<ServiceExtensionDescription> _extensionDescriptions = [
   togglePlatformMode,
   slowAnimations,
   structuredErrors,
+  httpEnableTimelineLogging,
+  socketProfiling,
+  invertOversizedImages,
 ];
 
 final Map<String, ServiceExtensionDescription> serviceExtensionsAllowlist =
@@ -262,3 +307,37 @@ final Map<String, ServiceExtensionDescription> serviceExtensionsAllowlist =
   key: (extension) => extension.extension,
   value: (extension) => extension,
 );
+
+/// Service extensions that are not safe to call unless a frame has already
+/// been rendered.
+///
+/// Flutter can sometimes crash if these extensions are called before the first
+/// frame is done rendering. We are intentionally conservative about which
+/// extensions are safe to run before the first frame as there is little harm
+/// in setting these extensions after one frame has rendered without the
+/// extension set.
+final Set<String> _unsafeBeforeFirstFrameFlutterExtensions =
+    <ServiceExtensionDescription>[
+  debugPaint,
+  debugPaintBaselines,
+  repaintRainbow,
+  performanceOverlay,
+  debugAllowBanner,
+  toggleOnDeviceWidgetInspector,
+  toggleSelectWidgetMode,
+  enableOnDeviceInspector,
+  togglePlatformMode,
+  slowAnimations,
+].map((extension) => extension.extension).toSet();
+
+bool isUnsafeBeforeFirstFlutterFrame(String extensionName) {
+  return _unsafeBeforeFirstFrameFlutterExtensions.contains(extensionName);
+}
+
+bool isFlutterExtension(String extensionName) {
+  return extensionName.startsWith('ext.flutter.');
+}
+
+bool isDartIoExtension(String extensionName) {
+  return extensionName.startsWith('ext.dart.io.');
+}

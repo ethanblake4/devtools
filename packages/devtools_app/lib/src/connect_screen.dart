@@ -11,6 +11,8 @@ import 'package:devtools_app/src/utils.dart';
 import 'package:flutter/material.dart';
 import 'package:pedantic/pedantic.dart';
 
+import 'notifications.dart';
+
 /// The screen in the app responsible for connecting to the Dart VM.
 ///
 /// We need to use this screen to get a guarantee that the app has a Dart VM
@@ -84,6 +86,7 @@ class _ConnectScreenBodyState extends State<ConnectScreenBody> {
         RaisedButton(
           child: const Text('Connect'),
           onPressed: connectDebounce.invoke,
+          visualDensity: VisualDensity.comfortable,
         ),
       ],
     );

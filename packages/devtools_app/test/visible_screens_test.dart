@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 import 'package:devtools_app/src/app.dart';
-import 'package:devtools_app/src/code_size/code_size_screen.dart';
+import 'package:devtools_app/src/app_size/app_size_screen.dart';
 import 'package:devtools_app/src/debugger/debugger_screen.dart';
 import 'package:devtools_app/src/framework_controller.dart';
 import 'package:devtools_app/src/globals.dart';
@@ -12,9 +12,11 @@ import 'package:devtools_app/src/logging/logging_screen.dart';
 import 'package:devtools_app/src/memory/memory_screen.dart';
 import 'package:devtools_app/src/network/network_screen.dart';
 import 'package:devtools_app/src/performance/performance_screen.dart';
+import 'package:devtools_app/src/preferences.dart';
 import 'package:devtools_app/src/screen.dart';
 import 'package:devtools_app/src/service_manager.dart';
 import 'package:devtools_app/src/timeline/timeline_screen.dart';
+import 'package:devtools_app/src/vm_developer/vm_developer_tools_screen.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'support/mocks.dart';
@@ -24,10 +26,10 @@ void main() {
     FakeServiceManager fakeServiceManager;
 
     setUp(() async {
-      fakeServiceManager =
-          FakeServiceManager(useFakeService: true, availableLibraries: []);
+      fakeServiceManager = FakeServiceManager(availableLibraries: []);
       setGlobal(ServiceConnectionManager, fakeServiceManager);
       setGlobal(FrameworkController, FrameworkController());
+      setGlobal(PreferencesController, PreferencesController());
 
       await serviceManager.isolateManager.selectedIsolateAvailable.future;
     });
@@ -65,8 +67,8 @@ void main() {
             DebuggerScreen,
             NetworkScreen,
             LoggingScreen,
-            if (codeSizeScreenEnabled)
-              CodeSizeScreen,
+            AppSizeScreen,
+            // VMDeveloperToolsScreen,
           ]));
     });
 
@@ -83,7 +85,8 @@ void main() {
             DebuggerScreen,
             // NetworkScreen,
             LoggingScreen,
-            // if (codeSizeScreenEnabled) CodeSizeScreen,
+            // AppSizeScreen,
+            // VMDeveloperToolsScreen,
           ]));
     });
 
@@ -101,7 +104,8 @@ void main() {
             DebuggerScreen,
             NetworkScreen,
             LoggingScreen,
-            if (codeSizeScreenEnabled) CodeSizeScreen,
+            AppSizeScreen,
+            // VMDeveloperToolsScreen,
           ]));
     });
 
@@ -119,8 +123,8 @@ void main() {
             // DebuggerScreen,
             NetworkScreen,
             LoggingScreen,
-            if (codeSizeScreenEnabled)
-              CodeSizeScreen,
+            AppSizeScreen,
+            // VMDeveloperToolsScreen,
           ]));
     });
 
@@ -138,7 +142,8 @@ void main() {
             DebuggerScreen,
             // NetworkScreen,
             LoggingScreen,
-            // if (codeSizeScreenEnabled) CodeSizeScreen,
+            // AppSizeScreen,
+            // VMDeveloperToolsScreen,
           ]));
     });
 
@@ -156,8 +161,30 @@ void main() {
             // DebuggerScreen,
             // NetworkScreen,
             // LoggingScreen,
-            // if (codeSizeScreenEnabled) CodeSizeScreen,
+            // AppSizeScreen,
+            // VMDeveloperToolsScreen,
           ]));
+      offlineMode = false;
+    });
+
+    testWidgets('are correct for Dart CLI app with VM developer mode enabled',
+        (WidgetTester tester) async {
+      preferences.toggleVmDeveloperMode(true);
+      setupMockValues();
+      expect(
+          visibleScreenTypes,
+          equals([
+            // InspectorScreen,
+            TimelineScreen,
+            MemoryScreen,
+            PerformanceScreen,
+            DebuggerScreen,
+            NetworkScreen,
+            LoggingScreen,
+            AppSizeScreen,
+            VMDeveloperToolsScreen,
+          ]));
+      preferences.toggleVmDeveloperMode(false);
     });
   });
 }

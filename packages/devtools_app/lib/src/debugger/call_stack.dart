@@ -33,24 +33,37 @@ class _CallStackState extends State<CallStack> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<List<StackFrameAndSourcePosition>>(
-      valueListenable: controller.stackFramesWithLocation,
-      builder: (context, stackFrames, _) {
-        return ValueListenableBuilder<StackFrameAndSourcePosition>(
-          valueListenable: controller.selectedStackFrame,
-          builder: (context, selectedFrame, _) {
-            return ListView.builder(
-              itemCount: stackFrames.length,
-              itemExtent: defaultListItemHeight,
-              itemBuilder: (_, index) {
-                final frame = stackFrames[index];
-                return _buildStackFrame(frame, frame == selectedFrame);
+    return Column(children: [
+      ValueListenableBuilder<List<StackFrameAndSourcePosition>>(
+          valueListenable: controller.stackFramesWithLocation,
+          builder: (context, stackFrames, _) {
+            return Expanded(
+                child: ValueListenableBuilder<StackFrameAndSourcePosition>(
+              valueListenable: controller.selectedStackFrame,
+              builder: (context, selectedFrame, _) {
+                return ListView.builder(
+                  itemCount: stackFrames.length,
+                  itemExtent: defaultListItemHeight,
+                  itemBuilder: (_, index) {
+                    final frame = stackFrames[index];
+                    return _buildStackFrame(frame, frame == selectedFrame);
+                  },
+                );
               },
-            );
-          },
-        );
-      },
-    );
+            ));
+          }),
+      ValueListenableBuilder<bool>(
+          valueListenable: controller.hasTruncatedFrames,
+          builder: (_, hasTruncatedFrames, __) {
+            if (hasTruncatedFrames) {
+              return FlatButton(
+                onPressed: () => controller.getFullStack(),
+                child: const Text('SHOW ALL'),
+              );
+            }
+            return const SizedBox(height: 0, width: 0);
+          })
+    ]);
   }
 
   Widget _buildStackFrame(
@@ -66,6 +79,9 @@ class _CallStackState extends State<CallStack> {
         frame.frame.kind == FrameKind.kAsyncSuspensionMarker;
     final noLineInfo = frame.line == null;
 
+    final frameDescription = _descriptionFor(frame);
+    final locationDescription = _locationFor(frame);
+
     if (asyncMarker) {
       child = Row(
         children: [
@@ -73,7 +89,7 @@ class _CallStackState extends State<CallStack> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: densePadding),
             child: Text(
-              _descriptionFor(frame),
+              frameDescription,
               style: selected ? theme.selectedTextStyle : theme.subtleTextStyle,
             ),
           ),
@@ -85,7 +101,7 @@ class _CallStackState extends State<CallStack> {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
         text: TextSpan(
-          text: _descriptionFor(frame),
+          text: frameDescription,
           style: selected
               ? theme.selectedTextStyle
               : (asyncFrame || noLineInfo
@@ -93,7 +109,7 @@ class _CallStackState extends State<CallStack> {
                   : theme.regularTextStyle),
           children: [
             TextSpan(
-              text: _locationFor(frame),
+              text: ' $locationDescription',
               style: selected ? theme.selectedTextStyle : theme.subtleTextStyle,
             ),
           ],
@@ -101,7 +117,9 @@ class _CallStackState extends State<CallStack> {
       );
     }
 
-    return Material(
+    final isAsyncBreak = frame.frame.kind == FrameKind.kAsyncSuspensionMarker;
+
+    final result = Material(
       color: selected ? theme.selectedRowColor : null,
       child: InkWell(
         onTap: () => _onStackFrameSelected(frame),
@@ -112,6 +130,18 @@ class _CallStackState extends State<CallStack> {
         ),
       ),
     );
+
+    if (isAsyncBreak) {
+      return result;
+    } else {
+      return Tooltip(
+        message: locationDescription == null
+            ? frameDescription
+            : '$frameDescription $locationDescription',
+        waitDuration: tooltipWaitLong,
+        child: result,
+      );
+    }
   }
 
   Future<void> _onStackFrameSelected(StackFrameAndSourcePosition frame) async {
@@ -144,7 +174,7 @@ class _CallStackState extends State<CallStack> {
       return uri;
     }
     final file = uri.split('/').last;
-    return frame.line == null ? ' $file' : ' $file ${frame.line}';
+    return frame.line == null ? file : '$file ${frame.line}';
   }
 }
 

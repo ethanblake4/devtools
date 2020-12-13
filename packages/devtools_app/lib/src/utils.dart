@@ -71,6 +71,9 @@ String prettyPrintBytes(
   int mbFractionDigits = 1,
   bool includeUnit = false,
 }) {
+  if (bytes == null) {
+    return null;
+  }
   // TODO(peterdjlee): Generalize to handle different kbFractionDigits.
   // Ensure a small number of bytes does not print as 0 KB.
   // If bytes >= 52 and kbFractionDigits == 1, it will start rounding to 0.1 KB.
@@ -676,13 +679,19 @@ extension SafeAccess<T> on Iterable<T> {
   T get safeLast => isNotEmpty ? last : null;
 }
 
+/// Range class for all nums (double and int).
+///
+/// Only operations that work on both double and int should be added to this
+/// class.
 class Range {
   const Range(this.begin, this.end) : assert(begin <= end);
 
-  final double begin;
-  final double end;
+  final num begin;
+  final num end;
 
-  double get size => end - begin;
+  num get size => end - begin;
+
+  bool contains(num target) => target >= begin && target <= end;
 
   @override
   String toString() => 'Range($begin, $end)';
@@ -977,4 +986,41 @@ void debugLogger(String message) {
     logger.log('$message');
     return true;
   }());
+}
+
+final _lowercaseLookup = <String, String>{};
+
+// TODO(kenz): consider moving other String helpers into this extension.
+// TODO(kenz): replace other uses of toLowerCase() for string matching with
+// this extension method.
+extension StringExtension on String {
+  bool caseInsensitiveContains(String str) {
+    final lowerCase = _lowercaseLookup.putIfAbsent(this, () => toLowerCase());
+    final strLowerCase =
+        _lowercaseLookup.putIfAbsent(str, () => str.toLowerCase());
+    return lowerCase.contains(strLowerCase);
+  }
+}
+
+extension ListExtension<T> on List<T> {
+  List<T> joinWith(T separator) {
+    return [
+      for (int i = 0; i < length; i++) ...[
+        this[i],
+        if (i != length - 1) separator,
+      ]
+    ];
+  }
+}
+
+Map<String, String> devToolsQueryParams(String url) {
+  // DevTools urls can have the form:
+  // http://localhost:123/?key=value
+  // http://localhost:123/#/?key=value
+  // http://localhost:123/#/page-id?key=value
+  // Since we just want the query params, we will modify the url to have an
+  // easy-to-parse form.
+  final modifiedUri = url.replaceFirst(RegExp(r'#\/(\w*)[?]'), '?');
+  final uri = Uri.parse(modifiedUri);
+  return uri.queryParameters;
 }

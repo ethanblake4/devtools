@@ -13,6 +13,7 @@ import 'connected_app.dart';
 import 'dialogs.dart';
 import 'globals.dart';
 import 'info/info_controller.dart';
+import 'routing.dart';
 import 'table.dart';
 import 'table_data.dart';
 import 'theme.dart';
@@ -59,6 +60,13 @@ class DeviceDialog extends StatelessWidget {
           '${flutterVersion.engineRevision}';
     }
 
+    if (serviceManager.service.connectedUri != null) {
+      items['VM Service Connection'] =
+          serviceManager.service.connectedUri.toString();
+    }
+
+    // TODO(kenz): set actions alignment to `spaceBetween` if
+    // https://github.com/flutter/flutter/issues/69708 is fixed.
     return DevToolsDialog(
       title: dialogTitleText(theme, 'Device Info'),
       content: Column(
@@ -78,9 +86,20 @@ class DeviceDialog extends StatelessWidget {
         ],
       ),
       actions: [
+        _connectToNewAppButton(context),
         if (connectedApp.isRunningOnDartVM) _ViewVMFlagsButton(),
         DialogCloseButton(),
       ],
+    );
+  }
+
+  Widget _connectToNewAppButton(BuildContext context) {
+    return RaisedButton(
+      onPressed: () {
+        DevToolsRouterDelegate.of(context).navigate(homePageId, {'uri': null});
+        Navigator.of(context, rootNavigator: true).pop('dialog');
+      },
+      child: Text('Connect to a new app'.toUpperCase()),
     );
   }
 }
@@ -97,7 +116,7 @@ class _ViewVMFlagsButton extends StatelessWidget {
           builder: (context) => VMFlagsDialog(),
         ));
       },
-      child: Text('View VM Flags...'.toUpperCase()),
+      child: Text('View VM Flags'.toUpperCase()),
     );
   }
 }
@@ -164,7 +183,7 @@ class _VMFlagsDialogState extends State<VMFlagsDialog> with AutoDisposeMixin {
           const Expanded(child: SizedBox(width: denseSpacing)),
           Container(
             width: defaultSearchTextWidth,
-            height: defaultSearchTextHeight,
+            height: defaultTextFieldHeight,
             child: TextField(
               controller: filterController,
               decoration: const InputDecoration(
@@ -228,14 +247,18 @@ class _FlagTable extends StatelessWidget {
 }
 
 class _NameColumn extends ColumnData<_DialogFlag> {
-  _NameColumn() : super('Name', fixedWidthPx: 180);
+  _NameColumn()
+      : super(
+          'Name',
+          fixedWidthPx: 180,
+        );
 
   @override
   String getValue(_DialogFlag dataObject) => dataObject.name;
 }
 
 class _DescriptionColumn extends ColumnData<_DialogFlag> {
-  _DescriptionColumn() : super.wide('Description');
+  _DescriptionColumn() : super.wide('Description', minWidthPx: 100);
 
   @override
   String getValue(_DialogFlag dataObject) => dataObject.description;
@@ -246,7 +269,11 @@ class _DescriptionColumn extends ColumnData<_DialogFlag> {
 
 class _ValueColumn extends ColumnData<_DialogFlag> {
   _ValueColumn()
-      : super('Value', fixedWidthPx: 160, alignment: ColumnAlignment.right);
+      : super(
+          'Value',
+          fixedWidthPx: 160,
+          alignment: ColumnAlignment.right,
+        );
 
   @override
   String getValue(_DialogFlag dataObject) => dataObject.value;
@@ -254,9 +281,9 @@ class _ValueColumn extends ColumnData<_DialogFlag> {
 
 class _DialogFlag {
   _DialogFlag(this.flag)
-      : filterText = '${flag.name.toLowerCase()}\n'
-            '${flag.comment.toLowerCase()}\n'
-            '${flag.valueAsString.toLowerCase()}';
+      : filterText = '${flag.name?.toLowerCase()}\n'
+            '${flag.comment?.toLowerCase()}\n'
+            '${flag.valueAsString?.toLowerCase()}';
 
   final Flag flag;
   final String filterText;

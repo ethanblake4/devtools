@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 class ImageIconLabel extends StatelessWidget {
   const ImageIconLabel(this.icon, this.text, {this.minIncludeTextWidth});
 
-  final Image icon;
+  final Widget icon;
   final String text;
   final double minIncludeTextWidth;
 
@@ -56,4 +56,8 @@ bool _showLabelText(BuildContext context, double includeTextWidth) {
       MediaQuery.of(context).size.width > includeTextWidth;
 }
 
-Icon createIcon(IconData iconData) => Icon(iconData, size: 18.0);
+Icon createIcon(IconData iconData, {Color color}) => Icon(
+      iconData,
+      size: 18.0,
+      color: color,
+    );
